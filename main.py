@@ -6,8 +6,87 @@ import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.stattools import coint
 import matplotlib.pyplot as plt
+import pandas as pd
+from itertools import combinations
 
-def test_pair(price_a, price_b):
+def build_universe():
+    # Build the ticker universe by grabbing a list of S&P 500 Companies
+
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+    df = pd.read_html(url, flavor="bs4")[0]
+    # Formatting to allow compatibility with the rest of the project
+    df["Symbol"] = (
+        df["Symbol"].str.replace(".", "-", regex=False)
+    )
+
+    return df
+
+def build_industry_universe(df):
+    # Sort into industry groups to have eocnomically linked pairs and avoid brute force pairing
+    return (
+        df.groupby("GICS Sub-Industry")["Symbol"].apply(list).to_dict()
+    )
+
+def generate_pairs(industry_dict):
+
+    pairs = []
+
+    for industry, tickers in industry_dict.items():
+        if len(tickers) < 2:
+            continue
+        
+        for pair in combinations(tickers,2):
+            pairs.append((industry, pair[0], pair[1]))
+    
+    return pairs
+
+def correlation_filter(price_a, price_b, threshold=0.8):
+    
+    returns = pd.concat(
+        [
+            np.log(price_a).diff(),
+            np.log(price_b).diff()
+        ],
+        axis=1
+    ).dropna()
+
+    correlation = (
+        returns.iloc[:,0].corr(returns.iloc[:,1])
+    )
+
+    return correlation > threshold
+
+def cointegration_test(price_a, price_b):
+    score, p_value, _ = coint(np.log(price_a), np.log(price_b))
+
+    return p_value
+
+def estimate_beta(price_a, price_b):
+    y = np.log(price_a)
+
+    x = sm.add_constant(np.log(price_b))
+
+    model = sm.OLS(
+        y,
+        x
+    ).fit()
+
+    return model.params.iloc[1]
+
+def spread_construction(price_a,price_b,beta):
+
+    spread = np.log(price_a) - beta*np.log(price_b)
+
+    return spread
+
+def adf_test(spread):
+
+    result = adfuller(spread.dropna())
+
+    return result[1]
+
+#def test_pair(price_a, price_b):
     score, pvalue, critical_values = coint(
         price_a,
         price_b
@@ -15,7 +94,7 @@ def test_pair(price_a, price_b):
 
     return pvalue
 
-def ordinary_least_squares(adj_close):
+#def ordinary_least_squares(adj_close):
     # calculating the offset using linear regression
     # utilise log_prices
     ko = np.log(adj_close["KO"])
@@ -77,7 +156,6 @@ def ordinary_least_squares(adj_close):
    # else:
         #print("Not stationary")
 
-
 def neg_log_likelihood(params, spread):
 
     kappa, mu, sigma = params # where params is a tuple of those parameters
@@ -118,7 +196,27 @@ def neg_log_likelihood(params, spread):
 
     return -log_likelihood
 
-def monte_carlo_parameter_recovery():
+def calibrate_ou(spread):
+
+    result = minimize(
+        neg_log_likelihood,
+        x0=(
+            1.0,
+            spread.mean(),
+            spread.std()
+        ),
+        args=(spread.values,),
+        bounds=[
+            (1e-06, 20),
+            (None, None),
+            (1e-6, None)
+        ],
+        method="L-BFGS-B"
+    )
+
+    return result.x
+
+#def monte_carlo_parameter_recovery():
     # Synthetic OU Data
     for i in range(20):
         true_kappa = 1.5
@@ -183,30 +281,73 @@ def monte_carlo_parameter_recovery():
     print(f"mu:    {column_means[1]:.4f}")
     print(f"sigma: {column_means[2]:.4f}")
 
-data = yf.download(["KO", "PEP", "V", "MA", "XOM", "CVX", "JPM", "BAC"], start="2021-05-29", auto_adjust=False) # ticker data for PEPSI and Coke
-adj_close = data["Adj Close"] # grab only the adjusted close column prices
-# (Why do we pick and work with the Adjusted Close data?)
+df = build_universe()
 
-#nll = neg_log_likelihood((1.0,0.0,1.0), np.random.normal(0,1,size=1_000_000))
-#print(nll)
+industry_universe = build_industry_universe(df)
 
-ordinary_least_squares(adj_close)
+pairs = generate_pairs(industry_universe)
 
-pairs = [
-    ("KO", "PEP"),
-    ("V", "MA"),
-    ("XOM", "CVX"),
-    ("JPM", "BAC"),
-]
+all_tickers = df["Symbol"].tolist()
 
-for a, b in pairs:
+data = yf.download(
+    all_tickers,
+    start="2021-05-29", 
+    auto_adjust=False
+)
 
-    p = test_pair(
-        adj_close[a],
-        adj_close[b]
-    )
+prices = data["Adj Close"]
 
-    print(a, b, p)
+results = []
+
+for industry, a, b in pairs:
+    if not correlation_filter(prices[a], prices[b]):
+        continue
+
+    cointegration_p = cointegration_test(prices[a], prices[b])
+
+    if cointegration_p >= 0.05:
+        continue
+
+    beta = estimate_beta(prices[a], prices[b])
+
+    spread = spread_construction(prices[a], prices[b], beta)
+
+    adf_p = adf_test(spread)
+
+    if adf_p >= 0.05:
+        continue
+
+    kappa, mu, sigma = calibrate_ou(spread)
+
+    results.append({
+
+        "industry": industry,
+
+        "ticker_a": a,
+
+        "ticker_b": b,
+
+        "cointegration_p": cointegration_p,
+
+        "adf_p": adf_p,
+
+        "beta": beta,
+
+        "kappa": kappa,
+
+        "mu": mu,
+
+        "sigma": sigma
+    })
+
+results_df = pd.DataFrame(results)
+
+results_df.sort_values(
+    "kappa",
+    ascending=False
+)
+
+print(results_df)
 
 
 
