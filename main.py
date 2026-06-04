@@ -424,27 +424,25 @@ for industry, a, b in tqdm(pairs, desc="Analyzing pairs"):
 
     St = spread.iloc[-1]
 
-    expected_spread = (mu + (St - mu)*np.exp(-kappa * 5))
-    
-    z_score = compute_z_score(St, kappa, mu, sigma)
-
+    # calculate half life first to define look ahead window
     half_life = np.log(2) / kappa
 
+    # filter out structurally dead pairs before computing probabilities
     if half_life > 60:
         continue
 
-    #probability = reversion_probability(St, kappa, mu, sigma, horizon=half_life)
+    # Dynamic horizon: give slower pairs appropriate time to mean revert
+    horizon = 1.5 * half_life
 
-    #signal = generate_signal(z_score, probability)
-    
-    signal = ""
+    # compute stats using dynamic horizon
+    probability = reversion_probability(St, kappa, mu, sigma, horizon)
+    z_score = compute_z_score(St, kappa, mu, sigma)
+    expected_spread = (mu + (St - mu) * np.exp(-kappa * horizon))
 
-    if z_score > 2:
-        signal = "SHORT_SPREAD"
-    elif z_score < -2:
-        signal = "LONG_SPREAD"
-    else:
-        signal = "NO_TRADE"
+    # Soft filter: only require a baseline structural divergence (e.g. z-score > 1.5)
+    # we save all valid anomalies here; we will rank and isolate the best
+    if abs(z_score) < 1.5:
+        continue
 
     results.append({
 
@@ -472,27 +470,44 @@ for industry, a, b in tqdm(pairs, desc="Analyzing pairs"):
 
         "z_score": z_score,
 
-        #"reversion_probability": probability,
+        "reversion_probability": probability,
 
-        "signal": signal,
+        "signal": "PENDING", # Signal determined cross-sectionally later
 
         "expected_spread": expected_spread
     })
 
 results_df = pd.DataFrame(results)
 
-#results_df["signal_strength"] = (
-    #abs(results_df["z_score"] * results_df["reversion_probability"])
-#)
-
+# 1. Calculate the unified multi-factor ranking metric
 results_df["signal_strength"] = (
-    abs(results_df["z_score"])
-    / results_df["half_life"]
+    abs(results_df["z_score"] * results_df["reversion_probability"])
 )
 
+# 2. Sort the entire universe from best opportunity to worst
 results_df = results_df.sort_values("signal_strength", ascending=False)
 
-results_df.to_csv("output.csv", index=False)
+# 3. Portfolio Construction
+TOP_N = 10
+portfolio_df = results_df.head(TOP_N).copy()
+
+# 4. Finalise the directional signals for execution on our capital selection
+def assign_execution_signal(row, entry_z=2.0):
+    if row["z_score"] > entry_z:
+        return "SHORT_SPREAD"
+    elif row["z_score"] < -entry_z:
+        return "LONG_SPREAD"
+    
+    return "WATCH_LIST" # Cointegrated & strong, but waiting for peak divergence
+
+portfolio_df["signal"] = portfolio_df.apply(assign_execution_signal, axis=1)
+
+# Save both your top active execution portfolio and the broader ranked universe
+portfolio_df.to_csv("active_portfolio.csv", index=False)
+results_df.to_csv("all_ranked_pairs.csv", index=False)
+
+print(f"\n--- TOP {TOP_N} ACTIVE EXECUTION PORTFOLIO ---")
+print(portfolio_df[["ticker_a", "ticker_b", "z_score", "half_life", "reversion_probability", "signal"]])
 
 # Future addition
 # 1. Collect all cointegration p-values
