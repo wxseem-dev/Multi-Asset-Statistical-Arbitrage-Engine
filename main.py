@@ -245,12 +245,14 @@ def calibrate_ou(spread):
     return result.x
 
 def reversion_probability(St, kappa, mu, sigma, horizon=5):
-
     mean = (mu + (St - mu)*np.exp(-kappa*horizon))
 
     variance = (
         sigma**2 / (2 * kappa) * (1-np.exp(-2*kappa*horizon))
     )
+
+    if variance <= 1e-12:
+        return np.nan
 
     std = np.sqrt(variance)
 
@@ -264,9 +266,22 @@ def reversion_probability(St, kappa, mu, sigma, horizon=5):
     return 1 - norm.cdf(z)
 
 def compute_z_score(St, kappa, mu, sigma):
+    if kappa <= 1e-8:
+        return np.nan
+
     sigma_stationary = (sigma / np.sqrt(2 * kappa))
 
     return (St - mu) / sigma_stationary
+
+def generate_signal(z_score, probability, z_threshold=2, probability_threshold=0.60):
+
+    if (z_score > z_threshold and probability > probability_threshold):
+        return "SHORT_SPREAD"
+
+    elif (z_score < -z_threshold and probability > probability_threshold):
+        return "LONG_SPREAD"
+    
+    return "NO_TRADE"
 
 #def monte_carlo_parameter_recovery():
     # Synthetic OU Data
@@ -409,15 +424,28 @@ for industry, a, b in tqdm(pairs, desc="Analyzing pairs"):
 
     St = spread.iloc[-1]
 
+    expected_spread = (mu + (St - mu)*np.exp(-kappa * 5))
+    
     z_score = compute_z_score(St, kappa, mu, sigma)
-
-    probability = reversion_probability(St, kappa, mu, sigma, horizon=5)
 
     half_life = np.log(2) / kappa
 
     if half_life > 60:
         continue
+
+    #probability = reversion_probability(St, kappa, mu, sigma, horizon=half_life)
+
+    #signal = generate_signal(z_score, probability)
     
+    signal = ""
+
+    if z_score > 2:
+        signal = "SHORT_SPREAD"
+    elif z_score < -2:
+        signal = "LONG_SPREAD"
+    else:
+        signal = "NO_TRADE"
+
     results.append({
 
         "industry": industry,
@@ -442,19 +470,27 @@ for industry, a, b in tqdm(pairs, desc="Analyzing pairs"):
 
         "latest_spread": spread.iloc[-1],
 
-        "z-score": z_score,
+        "z_score": z_score,
 
-        "reversion_probability": reversion_probability
+        #"reversion_probability": probability,
+
+        "signal": signal,
+
+        "expected_spread": expected_spread
     })
 
 results_df = pd.DataFrame(results)
 
-results_df = results_df.sort_values(
-    "kappa",
-    ascending=False
+#results_df["signal_strength"] = (
+    #abs(results_df["z_score"] * results_df["reversion_probability"])
+#)
+
+results_df["signal_strength"] = (
+    abs(results_df["z_score"])
+    / results_df["half_life"]
 )
 
-print(results_df)
+results_df = results_df.sort_values("signal_strength", ascending=False)
 
 results_df.to_csv("output.csv", index=False)
 
