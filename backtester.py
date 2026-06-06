@@ -5,6 +5,60 @@ from quant_math import build_universe, build_industry_universe, generate_pairs, 
 from tqdm import tqdm
 import yfinance as yf
 
+class KalmanPairTracker:
+    def __init__(self, intial_beta, intial_mu):
+        # State vector: [beta, mu] -> [hedge_ratio, intercept]
+        self.state_mean = np.array([[intial_beta], [intial_mu]])
+
+        # State covariance matrix (how uncertain are we about our state?)
+        self.state_cov = np.zeros((2, 2))
+
+        # Process Noise (how fast are the true beta/mu allowed to change over time)
+        # Set very low so it doesn't overreact to daily noise
+        self.Vw = np.array([[1e-5, 0],
+        [0, 1e-5]])
+
+        # Measurement Noise (how noisy is the market data?)
+        self.Vv = 1e-3
+
+    def update(self, price_a, price_b):
+        # Takes today's raw prices, updates the dynamic hedge ratio and returns the instantaneous adaptive Z-score
+
+        # We work in log prices
+        y_t = np.log(price_a)
+        x_t = np.log(price_b)
+
+        # Observation matrix: [ln(Asset B), 1]
+        F_t = np.array([[x_t, 1.0]])
+
+        # 1. PREDICTION STEP
+        # State remians the same from yesterday
+        predicted_state_mean = self.state_mean
+        # Uncertainty increases slightly by the process noise
+        predicted_state_cov = self.state_cov + self.Vw
+
+        # What do we expect Asset A's log price ot be?
+        predicted_y = F_t.dot(predicted_state_mean)[0,0]
+
+        # 2. MEASUREMENT UPDATE
+        # The 'error' is our instantaneous spread
+        error = y_t - predicted_y
+
+        # Variance of the prediction
+        Q_t = F_t.dot(predicted_state_cov).dot(F_t.T)[0, 0] + self.Vv
+
+        # Kalman Gain (how much should we care about today's error?)
+        kalman_gain = predicted_state_cov.dot(F_t.T) / Q_t
+
+        # Update our hidden state [beta, mu]
+        self.state_mean = predicted_state_mean + kalman_gain * error
+        self.state_cov = predicted_state_cov - kalman_gain.dot(F_t).dot(predicted_state_cov)
+
+        # The adaptive Z-score is simply the error divided by its standard deviation
+        adaptive_z_score = error / np.sqrt(Q_t)
+
+        return adaptive_z_score, self.state_mean[0,0] # Returns Z-score and the new Beta
+
 class WalkForwardBacktester:
     def __init__(self, historical_price_data):
         # historical_price_data - pandas datafrime where the index is dates and columns are tickers
@@ -94,6 +148,10 @@ class WalkForwardBacktester:
 
             # Save our top 10 as a list of dictionaries for the Daily Clock to monitor
             self.active_order_book = results_df.head(10).to_dict('records')
+
+            for pair in self.active_order_book:
+                pair['kalman'] = KalmanPairTracker(intial_beta=pair['beta'], intial_mu=pair['mu'])
+
             print(f" -> SUCCESS! Selected new Top {len(self.active_order_book)} pairs.")
         else:
             self.active_order_book = []
@@ -105,12 +163,34 @@ class WalkForwardBacktester:
 
     def run_tactical_daily_check(self, current_date):
         # Daily Clock: Just check today's prices against the chosen top 10
+        # If our monthly searches found nothing, there is nothing to track today
+        if not self.active_order_book:
+            return
+        
         today_prices = self.prices.loc[current_date]
+
+        print(f" [Daily Clock] {current_date.date()} > Monitoring {len(self.active_order_book)} active target(s):")
+        
+        for pair in self.active_order_book:
+            a = pair["ticker_a"]
+            b = pair["ticker_b"]
+            
+            # The static Z-Score using frozen monthly math for comparison
+            static_spread = np.log(today_prices[a]) - pair['beta'] * np.log(today_prices[b])
+            static_z = (static_spread - pair['mu']) / pair['sigma']
+
+            kf = pair['kalman']
+            adaptive_z, dynamic_beta = kf.update(today_prices[a], today_prices[b])
+
+            print(f"    -> Pair {a}-{b} | STATIC Z: {static_z: 5.2f} | ADAPTIVE Z: {adaptive_z: 5.2f} | Dynamic Beta: {dynamic_beta:.3f}")
+            # Future home of execution:
+            # if today_z > 2.0: Trigger SHORT_SPREAD
+            # if today < -2.0: Trigger LONG_SPREAD
+            # if trade is active and today_z crosses 0: CLOSE_TRADE (Take Profit)
 
         # In the future, this is where you loop through self.active_order_book
         # update the Kalman Filter, and check if Z-scores crossed +/- 2.0
         # print(f"  [Daily Clock] Checking positions for {current_date.date()}...")
-        pass
 
     def execute_simulation(self):
         # conveyor belt: starts the loop through time
