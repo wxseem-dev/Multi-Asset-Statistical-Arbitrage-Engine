@@ -12,6 +12,7 @@ from tqdm import tqdm
 import requests
 from io import StringIO
 import os
+import hmmlearn.hmm as hmm
 
 def build_universe():
     # Build the ticker universe by grabbing a list of S&P 500 Companies
