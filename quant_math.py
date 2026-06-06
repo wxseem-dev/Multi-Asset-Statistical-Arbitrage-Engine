@@ -82,7 +82,9 @@ def correlation_filter(price_a, price_b, threshold=0.6):
 def cointegration_test(price_a, price_b):
     score, p_value, _ = coint(np.log(price_a), np.log(price_b))
 
-    return p_value
+    #return p_value
+
+    return p_value < 0.10, p_value
 
 def estimate_beta(price_a, price_b):
     y = np.log(price_a)
@@ -104,9 +106,14 @@ def spread_construction(price_a,price_b,beta):
 
 def adf_test(spread):
 
-    result = adfuller(spread.dropna())
+    #result = adfuller(spread.dropna())
 
-    return result[1]
+    #return result[1]
+
+    result = adfuller(spread)
+    p_value = result[1]
+
+    return p_value < 0.10, p_value
 
 #def test_pair(price_a, price_b):
     #score, pvalue, critical_values = coint(
@@ -354,14 +361,15 @@ def detect_market_regime(sp500_returns):
     # Regime 1: High Volatility (Panic)
 
     # Reshape returns for the HMM model
-    returns_array = np.array(sp500_returns).reshape(-1, 1)
+    returns_array = np.array(sp500_returns).reshape(-1, 1) * 100.0
 
     # Train a 2-state model
     model = hmm.GaussianHMM(
         n_components=2,
         covariance_type="diag",
         n_iter=500,
-        tol=0.01
+        tol=1e-3,
+        min_covar=1e-3
     )
 
     import warnings

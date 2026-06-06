@@ -71,6 +71,9 @@ class WalkForwardBacktester:
         self.rebalance_frequency = 21 # Run the heavy maths every 21 days (~ 1 month)
         self.lookback_window = 252 # Use 1 year of data to recalibrate
 
+        # Initialise our portfolio manager ledger
+        self.portfolio = PortfolioManager(initial_capital=1000000.0, allocation_per_pair=100000.0)
+
     def run_structural_rebalance(self, current_date):
         # Monthly clock: stop the belt, look back 1 year and pick the top 10 again
 
@@ -112,8 +115,9 @@ class WalkForwardBacktester:
                 continue
 
             # Filter 2: Cointegration
-            coint_p = cointegration_test(price_a, price_b)
-            if coint_p > 0.05:
+            coint_pass, coint_p = cointegration_test(price_a, price_b)
+            
+            if not coint_pass:
                 continue
 
             # Filter 3: Ornstein-Uhlenbeck Calibation
@@ -121,8 +125,8 @@ class WalkForwardBacktester:
             spread = spread_construction(price_a, price_b, beta)
 
             # Make sure spread is stationary
-            adf_p = adf_test(spread)
-            if adf_p > 0.05:
+            adf_pass, adf_p = adf_test(spread)
+            if not adf_pass:
                 continue
 
             ou_params = calibrate_ou(spread)
@@ -178,10 +182,14 @@ class WalkForwardBacktester:
 
         print(f" [Daily Clock] {current_date.date()} > Monitoring {len(self.active_order_book)} active target(s):")
         
+        # Dictionary container to pass cleanly to the Portfolio Ledger
+        daily_signals = {}
+
         for pair in self.active_order_book:
             a = pair["ticker_a"]
             b = pair["ticker_b"]
-            
+            pair_key = f"{a}-{b}"
+
             # 1. Kalman Filter Adaptive Z-Score
             kf = pair['kalman']
             adaptive_z, dynamic_beta = kf.update(today_prices[a], today_prices[b])
@@ -200,30 +208,59 @@ class WalkForwardBacktester:
             # 3. Get the Copula CDF Probability
             copula_prob = calculate_copula_probability(hist_spread, today_spread)
 
-            # REGIME AWARE EXECUTION LOGIC
+            # Path dependent execution hysteresis state machine
+            is_currently_holding = pair_key in self.portfolio.active_positions
             signal = "WATCH"
 
-            if self.current_regime == "NORMAL":
-                # In normal markets, we can trust the Z-score (entry at +/- 2.0)
-                # and a copula probability > 95% or < 5%
-                if adaptive_z > 2.0 and copula_prob > 0.95:
-                    signal = "SHORT_SPREAD"
-                elif adaptive_z < -2.0 and copula_prob < 0.05:
-                    signal = "LONG SPREAD"
-            
-            elif self.current_regime == "PANIC":
-                # in panics, spread naturally wide. We demand extreme tail-divergence.
-                # Z-score must be > 3.0 and copula probability > 99% or < 1%
-                if adaptive_z > 3.0 and copula_prob > 0.99:
-                    signal = "SHORT SPREAD (PANIC TIER)"
-                elif adaptive_z < -3.0 and copula_prob < 0.01:
-                    signal = "LONG SPREAD (PANIC TIER)"
+            if is_currently_holding:
+                # path a: if we are already in this trade, we hold until it mean reverts back to zero (Z=0)
+                position_details = self.portfolio.active_positions[pair_key]
+                entry_signal = position_details["signal"]
 
-            print(f"    -> Pair {a}-{b} | Regime: {self.current_regime} | ADAPTIVE Z: {adaptive_z: 5.2f} | Copula Prob: {copula_prob:.3f} | Signal: {signal}")
-            # Future home of execution:
-            # if today_z > 2.0: Trigger SHORT_SPREAD
-            # if today < -2.0: Trigger LONG_SPREAD
-            # if trade is active and today_z crosses 0: CLOSE_TRADE (Take Profit)
+                if entry_signal == "SHORT SPREAD":
+                    # We shorted the spread; stay short until it falls back below mean zero
+                    if adaptive_z <= 0.0:
+                        signal = "WATCH" # Hits exit rule
+                    else:
+                        signal = "SHORT SPREAD" # Continue holding position open
+                elif entry_signal == "LONG SPREAD":
+                    # We went long the spread; stay long until it rises back above mean zero
+                    if adaptive_z >= 0.0:
+                        signal = "WATCH"  # Hits exit rule
+                    else:
+                        signal = "LONG SPREAD"  # Continue holding position open
+
+            else:
+                # PATH B: If we do NOT have an open position, evaluate standard regime-aware entry triggers
+                if self.current_regime == "NORMAL":
+                    if adaptive_z > 2.0 and copula_prob > 0.95:
+                        signal = "SHORT SPREAD"
+                    elif adaptive_z < -2.0 and copula_prob < 0.05:
+                        signal = "LONG REDIRECT"
+                        signal = "LONG SPREAD"
+                
+                elif self.current_regime == "PANIC":
+                    # Demand high margins of safety in structural high vol panic regimes
+                    if adaptive_z > 3.0 and copula_prob > 0.99:
+                        signal = "SHORT SPREAD"
+                    elif adaptive_z < -3.0 and copula_prob < 0.01:
+                        signal = "LONG SPREAD"
+
+            # Store mapping detais for portfolio lifecycle calculations
+            daily_signals[pair_key] = {
+                "signal": signal,
+                "beta": dynamic_beta
+            }
+
+            print(f"    -> Pair {a}-{b} | Regime: {self.current_regime:6s} | ADAPTIVE Z: {adaptive_z: 5.2f} | Copula Prob: {copula_prob:.3f} | Decision: {signal}")
+
+        # Dispatch daily signals batch cleanly into the portfolio accounting engine
+        self.portfolio.execute_signals(current_date, daily_signals, today_prices)
+
+        # Future home of execution:
+        # if today_z > 2.0: Trigger SHORT_SPREAD
+        # if today < -2.0: Trigger LONG_SPREAD
+        # if trade is active and today_z crosses 0: CLOSE_TRADE (Take Profit)
 
         # In the future, this is where you loop through self.active_order_book
         # update the Kalman Filter, and check if Z-scores crossed +/- 2.0
@@ -247,6 +284,111 @@ class WalkForwardBacktester:
             self.run_tactical_daily_check(today)
             
         print("\nSimulation Complete.")
+
+        # Print accounting performance engine metrics
+        final_equity = self.portfolio.pnl_history[-1]["total_equity"] if self.portfolio.pnl_history else self.portfolio.capital
+        print("\n" + "="*30 + " BACKTEST METRIC PERFORMANCE REPORT " + "="*30)
+        print(f" Initial Portfolio Capital:  $1,000,000.00")
+        print(f" Final Mark-to-Market Equity: ${final_equity:,.2f}")
+        print(f" Strategy Net Absolute Return: {((final_equity / 1000000.0) - 1) * 100:.2f}%")
+        print(f" Total Closed Completed Trades: {len(self.portfolio.trade_log)}")
+        print("="*96)
+
+        if len(self.portfolio.trade_log) > 0:
+            trades_df = pd.DataFrame(self.portfolio.trade_log)
+            print("\n--- COMPLETED TRADE LOG AUDIT TRAIL ---")
+            print(trades_df.to_string(index=False))
+
+class PortfolioManager:
+    def __init__(self, initial_capital=1000000.0, allocation_per_pair=100000.0):
+        self.capital = initial_capital
+        self.allocation = allocation_per_pair
+        self.active_positions = {} # Key: "A-B", Value: entry details
+        self.pnl_history = [] # Tracks total portfolio value over time
+        self.trade_log = [] # For auditing every trade later
+
+    def execute_signals(self, current_date, daily_signals, today_prices):
+            # Processes today's tactical signals to open, hold, or close positions
+            # 1. Check existing positions for exits
+            active_keys = list(self.active_positions.keys())
+
+            for pair_key in active_keys:
+                a, b = pair_key.split("-")
+                current_signal = daily_signals.get(pair_key, {}).get("signal", "WATCH")
+
+                # if signal drops to watch, take profit / cut loss
+                if current_signal == "WATCH":
+                    self._close_position(pair_key, today_prices[a], today_prices[b], current_date)
+            
+            # 2. Check for new trade entries
+            for pair_key, data in daily_signals.items():
+                if pair_key in self.active_positions:
+                    continue # Already in this trade
+            
+                signal = data["signal"]
+                beta = data["beta"]
+                a, b = pair_key.split("-")
+
+                if signal in ["SHORT SPREAD", "LONG SPREAD"]:
+                    self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date)
+
+            # 3. Mark-to-market total equity for today
+            today_equity = self.capital + self._calculate_unrealised_pnl(today_prices)
+            self.pnl_history.append({"date": current_date, "total_equity": today_equity})
+        
+    def _open_position(self, pair_key, signal, beta, price_a, price_b, date):
+            # Calculate exactly how many shares we handle based on our allocation budget
+            # For simplicity, allocating standard capital to Leg A, weighted by beta to Leg B
+            shares_a = self.allocation / price_a
+            shares_b = (self.allocation * beta) / price_b
+
+            self.active_positions[pair_key] = {
+                "signal": signal,
+                "beta": beta,
+                "entry_price_a": price_a,
+                "entry_price_b": price_b,
+                "shares_a": shares_a,
+                "shares_b": shares_b,
+                "entry_date": date
+            }
+        
+    def _close_position(self, pair_key, price_a, price_b, date):
+            pos = self.active_positions.pop(pair_key)
+
+            # Calculate individual leg returns
+            pnl_a = (price_a - pos["entry_price_a"]) * pos["shares_a"]
+            pnl_b = (price_b - pos["entry_price_b"]) * pos["shares_b"]
+
+            # Invert returns if we were shorting that specific leg
+            if pos["signal"] == "SHORT SPREAD":
+                total_trade_pnl = (-pnl_a) + pnl_b
+            else: # LONG SPREAD
+                total_trade_pnl = pnl_a + (-pnl_b)
+
+            # Update physical cash account balance
+            self.capital += total_trade_pnl
+
+            self.trade_log.append({
+                "pair": pair_key,
+                "type": pos["signal"],
+                "entry_date": pos["entry_date"],
+                "exit_date": date,
+                "pnl": total_trade_pnl
+            })
+        
+    def _calculate_unrealised_pnl(self, today_prices):
+            unrealised = 0.0
+            for pair_key, pos in self.active_positions.items():
+                a, b = pair_key.split("-")
+                pnl_a = (today_prices[a] - pos["entry_price_a"]) * pos["shares_a"]
+                pnl_b = (today_prices[b] - pos["entry_price_b"]) * pos["shares_b"]
+
+                if pos["signal"] == "SHORT_SPREAD":
+                    unrealised += (-pnl_a) + pnl_b
+                else:
+                    unrealised += pnl_a + (-pnl_b)
+                
+            return unrealised
 
 if __name__ == "__main__":
     print("Fetching historical data...")
