@@ -1,6 +1,6 @@
 import yfinance as yf # import ticker data
 from scipy.optimize import minimize # import optimiser
-from scipy.stats import norm
+from scipy.stats import norm, t
 import numpy as np
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
@@ -347,3 +347,48 @@ def generate_signal(z_score, probability, z_threshold=2, probability_threshold=0
     #print(f"kappa: {column_means[0]:.4f}")
     #print(f"mu:    {column_means[1]:.4f}")
     #print(f"sigma: {column_means[2]:.4f}")
+
+def detect_market_regime(sp500_returns):
+    # Uses a Gaussian Hidden Markov Model to classify the market into 2 regimes:
+    # Regime 0: Low Volatility (Normal)
+    # Regime 1: High Volatility (Panic)
+
+    # Reshape returns for the HMM model
+    returns_array = np.array(sp500_returns).reshape(-1, 1)
+
+    # Train a 2-state model
+    model = hmm.GaussianHMM(
+        n_components=2,
+        covariance_type="diag",
+        n_iter=500,
+        tol=0.01
+    )
+
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        model.fit(returns_array)
+    
+    hidden_states = model.predict(returns_array)
+
+    variances = np.array([np.diag(model.covars_[i]) for i in range(2)])
+    panic_state = np.argmax(variances)
+
+    current_regime = hidden_states[-1]
+
+    if current_regime == panic_state:
+        return "PANIC"
+    else:
+        return "NORMAL"
+
+def calculate_copula_probability(spread, current_spread_val):
+    # Transforms the historical spread into a uniform distribution [0,1] using a Student-t distirbution to account for fat tails, returning the probability CDF
+    # of the current spread value
+
+    # 1. Fit a student-t distribution tot he historical spread to capture fat tails
+    df, loc, scale = t.fit(spread)
+
+    # 2. Calculate the cumulative dsitribution function for todays spread
+    prob_cdf = t.cdf(current_spread_val, df, loc, scale)
+
+    return prob_cdf

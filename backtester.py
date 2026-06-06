@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import requests
-from quant_math import build_universe, build_industry_universe, generate_pairs, align_prices, correlation_filter, cointegration_test, estimate_beta, spread_construction, adf_test, neg_log_likelihood, calibrate_ou, reversion_probability, compute_z_score, generate_signal
+from quant_math import build_universe, build_industry_universe, generate_pairs, align_prices, correlation_filter, cointegration_test, estimate_beta, spread_construction, adf_test, neg_log_likelihood, calibrate_ou, reversion_probability, compute_z_score, generate_signal, detect_market_regime, calculate_copula_probability
 from tqdm import tqdm
 import yfinance as yf
 
@@ -82,6 +82,13 @@ class WalkForwardBacktester:
         start_date = self.all_dates[start_idx]
 
         historical_slice = self.prices.loc[start_date:current_date]
+
+        # Detect Market Regime
+        # Assuming you have SPY data in your historical slice, or use a proxy like JPM currently
+        market_proxy = historical_slice["JPM"].pct_change().dropna()
+        self.current_regime = detect_market_regime(market_proxy)
+
+        print(f" -> Detected Market Regime: {self.current_regime}")
 
         # Mathematics
         print(" -> Building Universe & Generating Pairs...")
@@ -175,14 +182,44 @@ class WalkForwardBacktester:
             a = pair["ticker_a"]
             b = pair["ticker_b"]
             
-            # The static Z-Score using frozen monthly math for comparison
-            static_spread = np.log(today_prices[a]) - pair['beta'] * np.log(today_prices[b])
-            static_z = (static_spread - pair['mu']) / pair['sigma']
-
+            # 1. Kalman Filter Adaptive Z-Score
             kf = pair['kalman']
             adaptive_z, dynamic_beta = kf.update(today_prices[a], today_prices[b])
 
-            print(f"    -> Pair {a}-{b} | STATIC Z: {static_z: 5.2f} | ADAPTIVE Z: {adaptive_z: 5.2f} | Dynamic Beta: {dynamic_beta:.3f}")
+            # 2. Re-create the dynamic spread for copula evaluation
+            today_spread = np.log(today_prices[a]) - dynamic_beta * np.log(today_prices[b])
+
+            # Fetch the historical slice for this pair up to today to ft the distribution
+            current_idx = self.all_dates.index(current_date)
+            start_idx = max(0, current_idx - self.lookback_window)
+            start_date = self.all_dates[start_idx]
+            hist_prices = self.prices.loc[start_date:current_date]
+
+            hist_spread = np.log(hist_prices[a]) - dynamic_beta * np.log(hist_prices[b])
+
+            # 3. Get the Copula CDF Probability
+            copula_prob = calculate_copula_probability(hist_spread, today_spread)
+
+            # REGIME AWARE EXECUTION LOGIC
+            signal = "WATCH"
+
+            if self.current_regime == "NORMAL":
+                # In normal markets, we can trust the Z-score (entry at +/- 2.0)
+                # and a copula probability > 95% or < 5%
+                if adaptive_z > 2.0 and copula_prob > 0.95:
+                    signal = "SHORT_SPREAD"
+                elif adaptive_z < -2.0 and copula_prob < 0.05:
+                    signal = "LONG SPREAD"
+            
+            elif self.current_regime == "PANIC":
+                # in panics, spread naturally wide. We demand extreme tail-divergence.
+                # Z-score must be > 3.0 and copula probability > 99% or < 1%
+                if adaptive_z > 3.0 and copula_prob > 0.99:
+                    signal = "SHORT SPREAD (PANIC TIER)"
+                elif adaptive_z < -3.0 and copula_prob < 0.01:
+                    signal = "LONG SPREAD (PANIC TIER)"
+
+            print(f"    -> Pair {a}-{b} | Regime: {self.current_regime} | ADAPTIVE Z: {adaptive_z: 5.2f} | Copula Prob: {copula_prob:.3f} | Signal: {signal}")
             # Future home of execution:
             # if today_z > 2.0: Trigger SHORT_SPREAD
             # if today < -2.0: Trigger LONG_SPREAD
