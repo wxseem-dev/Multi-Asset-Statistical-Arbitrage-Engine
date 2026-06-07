@@ -66,13 +66,21 @@ class WalkForwardBacktester:
         self.prices = historical_price_data
         self.all_dates = sorted(self.prices.index.unique())
 
+        self.initial_capital = 1000000.0
+        self.capital = self.initial_capital
+        self.trade_log = []
+        self.active_positions = {}
+
+        # Track daily equity curve
+        self.equity_curve = []
+
         # Portfolio State
         self.active_order_book = [] # Will hold top 10 pairs
         self.rebalance_frequency = 21 # Run the heavy maths every 21 days (~ 1 month)
         self.lookback_window = 252 # Use 1 year of data to recalibrate
 
         # Initialise our portfolio manager ledger
-        self.portfolio = PortfolioManager(initial_capital=1000000.0, allocation_per_pair=100000.0)
+        self.portfolio = PortfolioManager(self.initial_capital, allocation_per_pair=100000.0)
 
     def run_structural_rebalance(self, current_date):
         # Monthly clock: stop the belt, look back 1 year and pick the top 10 again
@@ -309,6 +317,11 @@ class WalkForwardBacktester:
             
             # The daily check runs EVERY day, even on rebalance days
             self.run_tactical_daily_check(today)
+
+            # Record total portfolio value for the day
+            unrealised = self.portfolio._calculate_unrealised_pnl(self.prices.loc[today])
+            total_equity = self.portfolio.capital + unrealised
+            self.equity_curve.append({"date": today, "equity": total_equity})
             
         print("\nSimulation Complete.")
 
@@ -325,6 +338,60 @@ class WalkForwardBacktester:
             trades_df = pd.DataFrame(self.portfolio.trade_log)
             print("\n--- COMPLETED TRADE LOG AUDIT TRAIL ---")
             print(trades_df.to_string(index=False))
+        
+        self.generate_performance_report()
+
+    def generate_performance_report(self):
+        print("\n" + "="*50)
+        print("         INSTITUTIONAL PERFORMANCE REPORT")
+        print("="*50)
+
+        if not self.portfolio.trade_log:
+            print("No trades executed.")
+            return
+
+        trades_df = pd.DataFrame(self.portfolio.trade_log)
+        equity_df = pd.DataFrame(self.equity_curve).set_index("date")
+
+        # 1. Capital & Returns
+        ending_capital = equity_df["equity"].iloc[-1] 
+        total_return = (ending_capital - self.initial_capital) / self.initial_capital * 100
+
+        # 2. Win Rate & Profit Factor
+        total_trades = len(trades_df)
+        winning_trades = trades_df[trades_df["pnl"] > 0]
+        win_rate = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
+
+        gross_profits = trades_df[trades_df["pnl"] > 0]["pnl"].sum()
+        gross_losses = abs(trades_df[trades_df["pnl"] < 0]["pnl"].sum())
+        profit_factor = gross_profits / gross_losses if gross_losses > 0 else float('inf')
+
+        # 3. Daily Returns & Sharpe Ratio (Annualised)
+        equity_df["daily_pct"] = equity_df["equity"].pct_change()
+        avg_return = equity_df["daily_pct"].mean()
+        std_return = equity_df["daily_pct"].std()
+
+        # Annualised Sharpe (Assuming risk-free rate = 0, 252 business days)
+        if std_return > 0:
+            sharpe_ratio = (avg_return / std_return) * np.sqrt(252)
+        else:
+            sharpe_ratio = 0.0
+        
+        # 4. Max Drawdown
+        equity_df["peak"] = equity_df["equity"].cummax()
+        equity_df["drawdown"] = (equity_df["equity"] - equity_df["peak"]) / equity_df["peak"]
+        max_drawdown = equity_df["drawdown"].min() * 100
+
+        print(f"Initial Capital:        ${self.initial_capital:,.2f}")
+        print(f"Ending Capital:         ${ending_capital:,.2f}")
+        print(f"Total Net Return:       {total_return:.2f}%")
+        print(f"Max Peak-to-Trough DD:  {max_drawdown:.2f}%")
+        print(f"Annualized Sharpe:      {sharpe_ratio:.2f}")
+        print("-" * 50)
+        print(f"Total Completed Round-Trips: {total_trades}")
+        print(f"Win Rate:               {win_rate:.2f}%")
+        print(f"Profit Factor:          {profit_factor:.2f}")
+        print("="*50)
 
 class PortfolioManager:
     def __init__(self, initial_capital=1000000.0, allocation_per_pair=100000.0):
@@ -471,7 +538,7 @@ class PortfolioManager:
                 pnl_a = (today_prices[a] - pos["entry_price_a"]) * pos["shares_a"]
                 pnl_b = (today_prices[b] - pos["entry_price_b"]) * pos["shares_b"]
 
-                if pos["signal"] == "SHORT_SPREAD":
+                if pos["signal"] == "SHORT SPREAD":
                     unrealised += (-pnl_a) + pnl_b
                 else:
                     unrealised += pnl_a + (-pnl_b)
