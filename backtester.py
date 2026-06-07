@@ -177,6 +177,7 @@ class WalkForwardBacktester:
             results.append({
                 "ticker_a": a, "ticker_b": b, "industry": industry,
                 "beta": beta, "mu": mu, "sigma": sigma, "kappa": kappa,
+                "half_life": half_life,
                 "z_score": z_score, "reversion_probability": prob,
                 "signal_strength": abs(z_score * prob)
             })
@@ -252,6 +253,11 @@ class WalkForwardBacktester:
                 position_details = self.portfolio.active_positions[pair_key]
                 entry_signal = position_details["signal"]
 
+                # Hard Z-Score Stop-Loss (Structural Break)
+                if abs(adaptive_z) >= 3.5:
+                    signal = "WATCH" # Forces an immediate exit
+                    print(f"      [!] STRUCTURAL BREAK on {pair_key} (Z={adaptive_z:.2f}). Forcing Exit.")
+
                 if entry_signal == "SHORT SPREAD":
                     # We shorted the spread; stay short until it falls back below mean zero
                     if adaptive_z <= 0.0:
@@ -284,7 +290,9 @@ class WalkForwardBacktester:
             # Store mapping detais for portfolio lifecycle calculations
             daily_signals[pair_key] = {
                 "signal": signal,
-                "beta": dynamic_beta
+                "beta": dynamic_beta,
+                "half_life": pair.get("half_life", 30),
+                "regime": self.current_regime
             }
 
             print(f"    -> Pair {a}-{b} | Regime: {self.current_regime:6s} | ADAPTIVE Z: {adaptive_z: 5.2f} | Copula Prob: {copula_prob:.3f} | Decision: {signal}")
@@ -410,6 +418,10 @@ class PortfolioManager:
                 pos = self.active_positions[pair_key]
                 a, b = pair_key.split("-")
 
+                # Calculate days held
+                days_held = (current_date - pos["entry_date"]).days
+                max_allowed_days = int(2 * pos.get("half_life", 30))
+
                 # Calculate the physical cash PnL for this pair today
                 pnl_a = (today_prices[a] - pos["entry_price_a"]) * pos["shares_a"]
                 pnl_b = (today_prices[b] - pos["entry_price_b"]) * pos["shares_b"]
@@ -422,24 +434,40 @@ class PortfolioManager:
                 current_signal = daily_signals.get(pair_key, {}).get("signal", "WATCH")
 
                 # Force exit if statistical mean-reversion completes (WATCH) OR if Risk limit is breached
-                if current_signal == "WATCH" or trade_pnl <= max_loss_limit:
+                if current_signal == "WATCH" or trade_pnl <= max_loss_limit or days_held > max_allowed_days:
                     self._close_position(pair_key, today_prices[a], today_prices[b], current_date)
                     
                     # Optional: Print a warning to the console so you can see the risk manager working
                     if trade_pnl <= max_loss_limit:
                         print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}: ${trade_pnl:.2f}")
+                    elif days_held > max_allowed_days:
+                        print(f"    [RISK MGR] TIME-STOP EXPIRED on {pair_key} ({days_held} days)")
             
             # 2. Check for new trade entries
             for pair_key, data in daily_signals.items():
                 if pair_key in self.active_positions:
                     continue
+
+                # Hard cap on portfolio size and leverage check
+                MAX_CONCURRENT_TRADES = 10
+                if len(self.active_positions) >= MAX_CONCURRENT_TRADES:
+                    continue # skip entry, portfolio is full
                     
                 signal = data["signal"]
                 beta = data["beta"]
+                half_life = data["half_life"]
+                regime = data["regime"]
                 a, b = pair_key.split("-")
 
                 if signal in ["SHORT SPREAD", "LONG SPREAD"]:
-                    self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date)
+                    required_allocation = self.capital * 0.10
+                    if regime == "PANIC":
+                        required_allocation *= 0.50
+                        
+                    if self.capital >= required_allocation:
+                        self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date, half_life, regime)
+                    else:
+                        print(f"    [MARGIN LIMIT] Insufficient capital to open {pair_key}. Required: ${required_allocation:.2f}")
             
             # 3. Mark to market total equity for today
             today_equity = self.capital + self._calculate_unrealised_pnl(today_prices)
@@ -447,12 +475,16 @@ class PortfolioManager:
 
             
         
-    def _open_position(self, pair_key, signal, beta, price_a, price_b, date):
+    def _open_position(self, pair_key, signal, beta, price_a, price_b, date, half_life, regime):
             # Calculate exactly how many shares we handle based on our allocation budget
             # For simplicity, allocating standard capital to Leg A, weighted by beta to Leg B
             
             # 1. Allocate 10% of current available equity to this trade
             allocation = self.capital * 0.10
+
+            # Regime-Conditional Scaling
+            if regime == "PANIC":
+                allocation = allocation * 0.50
 
             # Institutional friction parameters
             SLIPPAGE_PCT = 0.00015 # 1.5 basis points per stock
@@ -488,7 +520,8 @@ class PortfolioManager:
                 "shares_a": shares_a,
                 "shares_b": shares_b,
                 "allocation": allocation,
-                "entry_date": date
+                "entry_date": date,
+                "half_life": half_life
             }
         
     def _close_position(self, pair_key, price_a, price_b, date):
