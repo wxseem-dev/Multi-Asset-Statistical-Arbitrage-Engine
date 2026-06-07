@@ -387,20 +387,37 @@ class PortfolioManager:
             # 1. Allocate 10% of current available equity to this trade
             allocation = self.capital * 0.10
 
+            # Institutional friction parameters
+            SLIPPAGE_PCT = 0.00015 # 1.5 basis points per stock
+            FLAT_COMMISSION = 1.00 # $1.00 execution fee per ticker
+
+            # Apply slippage to entry prices based on trade direction
+            if signal == "SHORT SPREAD":
+                # Short A (sell at lower price), Long B (buy at higher price)
+                exec_price_a = price_a * (1-SLIPPAGE_PCT)
+                exec_price_b = price_b * (1+SLIPPAGE_PCT)
+            else: # Long spread
+                # Long A (buy at higher price), Short B (sell at lower price)
+                exec_price_a = price_a * (1+SLIPPAGE_PCT)
+                exec_price_b = price_b * (1-SLIPPAGE_PCT)
+
             # 2. Beta-Weighted Dollar Allocation
             # We need Value_A + Value_B = allocation, where Value_B = Value_A * abs(beta)
             value_a = allocation / (1 + abs(beta))
             value_b = allocation - value_a # This equals value_a * abs(beta)
 
             # 3. Convert locked dollar allocations into physical shares
-            shares_a = value_a / price_a
-            shares_b = value_b / price_b
+            shares_a = value_a / exec_price_a
+            shares_b = value_b / exec_price_b
+
+            # Deduct entry commissions from cash immediately
+            self.capital -= (FLAT_COMMISSION * 2)
 
             self.active_positions[pair_key] = {
                 "signal": signal,
                 "beta": beta,
-                "entry_price_a": price_a,
-                "entry_price_b": price_b,
+                "entry_price_a": exec_price_a,
+                "entry_price_b": exec_price_b,
                 "shares_a": shares_a,
                 "shares_b": shares_b,
                 "allocation": allocation,
@@ -410,15 +427,31 @@ class PortfolioManager:
     def _close_position(self, pair_key, price_a, price_b, date):
             pos = self.active_positions.pop(pair_key)
 
+            SLIPPAGE_PCT = 0.00015 # 1.5 basis points per stock
+            FLAT_COMMISSION = 1.00 # $1.00 execution fee per ticker
+            
+            # Apply slippage to exit prices based on position type
+            if pos["signal"] == "SHORT SPREAD":
+                # Buy back A (pay more), Sell out B (receive less)
+                exit_price_a = price_a * (1 + SLIPPAGE_PCT)
+                exit_price_b = price_b * (1 - SLIPPAGE_PCT)
+            else: # LONG SPREAD
+                # Sell out A (receive less), Buy back B (pay more)
+                exit_price_a = price_a * (1 - SLIPPAGE_PCT)
+                exit_price_b = price_b * (1 + SLIPPAGE_PCT)
+
             # Calculate individual leg returns
-            pnl_a = (price_a - pos["entry_price_a"]) * pos["shares_a"]
-            pnl_b = (price_b - pos["entry_price_b"]) * pos["shares_b"]
+            pnl_a = (exit_price_a - pos["entry_price_a"]) * pos["shares_a"]
+            pnl_b = (exit_price_b - pos["entry_price_b"]) * pos["shares_b"]
 
             # Invert returns if we were shorting that specific leg
             if pos["signal"] == "SHORT SPREAD":
                 total_trade_pnl = (-pnl_a) + pnl_b
             else: # LONG SPREAD
                 total_trade_pnl = pnl_a + (-pnl_b)
+
+            # Deduct exit commissions from the final trade PnL
+            total_trade_pnl -= (FLAT_COMMISSION * 2)
 
             # Update physical cash account balance
             self.capital += total_trade_pnl
