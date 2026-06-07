@@ -340,28 +340,45 @@ class PortfolioManager:
             active_keys = list(self.active_positions.keys())
 
             for pair_key in active_keys:
+                pos = self.active_positions[pair_key]
                 a, b = pair_key.split("-")
+
+                # Calculate the physical cash PnL for this pair today
+                pnl_a = (today_prices[a] - pos["entry_price_a"]) * pos["shares_a"]
+                pnl_b = (today_prices[b] - pos["entry_price_b"]) * pos["shares_b"]
+
+                trade_pnl = ((-pnl_a) + pnl_b) if pos["signal"] == "SHORT SPREAD" else (pnl_a + (-pnl_b))
+
+                # Risk Management: Set a strict -5% Stop loss on deployed capital
+                max_loss_limit = -(pos["allocation"] * 0.05)
+
                 current_signal = daily_signals.get(pair_key, {}).get("signal", "WATCH")
 
-                # if signal drops to watch, take profit / cut loss
-                if current_signal == "WATCH":
+                # Force exit if statistical mean-reversion completes (WATCH) OR if Risk limit is breached
+                if current_signal == "WATCH" or trade_pnl <= max_loss_limit:
                     self._close_position(pair_key, today_prices[a], today_prices[b], current_date)
+                    
+                    # Optional: Print a warning to the console so you can see the risk manager working
+                    if trade_pnl <= max_loss_limit:
+                        print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}: ${trade_pnl:.2f}")
             
             # 2. Check for new trade entries
             for pair_key, data in daily_signals.items():
                 if pair_key in self.active_positions:
-                    continue # Already in this trade
-            
+                    continue
+                    
                 signal = data["signal"]
                 beta = data["beta"]
                 a, b = pair_key.split("-")
 
                 if signal in ["SHORT SPREAD", "LONG SPREAD"]:
                     self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date)
-
-            # 3. Mark-to-market total equity for today
+            
+            # 3. Mark to market total equity for today
             today_equity = self.capital + self._calculate_unrealised_pnl(today_prices)
             self.pnl_history.append({"date": current_date, "total_equity": today_equity})
+
+            
         
     def _open_position(self, pair_key, signal, beta, price_a, price_b, date):
             # Calculate exactly how many shares we handle based on our allocation budget
@@ -386,6 +403,7 @@ class PortfolioManager:
                 "entry_price_b": price_b,
                 "shares_a": shares_a,
                 "shares_b": shares_b,
+                "allocation": allocation,
                 "entry_date": date
             }
         
