@@ -101,24 +101,38 @@ class WalkForwardBacktester:
         all_possible_pairs = generate_pairs(industry_dict)
 
         results = []
+
+        # DIAGNOSTIC FUNNEL #
+        stats = {
+            "total_scanned": 0,
+            "corr_pass": 0,
+            "coint_pass": 0,
+            "adf_pass": 0,
+            "ou_pass": 0,
+            "hl_pass": 0
+        }
+
         print(f" -> Scanning {len(all_possible_pairs)} pairs.")
 
         for industry, a, b in tqdm(all_possible_pairs, desc="Analyzing pairs"):
             # check if both tickers actually exist in our historical slice
             if a not in historical_slice.columns or b not in historical_slice.columns:
                 continue
-
+            
+            stats["total_scanned"] += 1
             price_a, price_b = align_prices(historical_slice[a], historical_slice[b])
 
             # Filter 1: Correlation
             if not correlation_filter(price_a, price_b, threshold=0.6):
                 continue
+            stats["corr_pass"] += 1
 
             # Filter 2: Cointegration
             coint_pass, coint_p = cointegration_test(price_a, price_b)
             
             if not coint_pass:
                 continue
+            stats["coint_pass"] += 1
 
             # Filter 3: Ornstein-Uhlenbeck Calibation
             beta = estimate_beta(price_a, price_b)
@@ -128,13 +142,20 @@ class WalkForwardBacktester:
             adf_pass, adf_p = adf_test(spread)
             if not adf_pass:
                 continue
+            stats["adf_pass"] += 1
 
             ou_params = calibrate_ou(spread)
             if ou_params is None:
                 continue
+            stats["ou_pass"] += 1
 
             kappa, mu, sigma = ou_params
             half_life = np.log(2) / kappa
+
+            # Filter 4: Half-life bounds (10 to 60 days)
+            if not (1 <= half_life <= 90):
+                continue
+            stats["hl_pass"] += 1
 
             # Calculate final metrics for ranking
             latest_spread = spread.iloc[-1]
@@ -151,6 +172,12 @@ class WalkForwardBacktester:
                 "z_score": z_score, "reversion_probability": prob,
                 "signal_strength": abs(z_score * prob)
             })
+
+        # PRINT FUNNEL RESULTS
+        print("\n--- STRUCTURAL FUNNEL DIAGNOSTICS ---")
+        for key, val in stats.items():
+            print(f" {key.ljust(15)}: {val}")
+        print("------------------------")
 
         # 3. RANK AND SAVE THE TOP 10
         if len(results) > 0:
@@ -233,17 +260,17 @@ class WalkForwardBacktester:
             else:
                 # PATH B: If we do NOT have an open position, evaluate standard regime-aware entry triggers
                 if self.current_regime == "NORMAL":
-                    if adaptive_z > 2.0 and copula_prob > 0.95:
+                    if adaptive_z > 1.75 and copula_prob > 0.95:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -2.0 and copula_prob < 0.05:
+                    elif adaptive_z < -1.75 and copula_prob < 0.05:
                         signal = "LONG REDIRECT"
                         signal = "LONG SPREAD"
                 
                 elif self.current_regime == "PANIC":
                     # Demand high margins of safety in structural high vol panic regimes
-                    if adaptive_z > 3.0 and copula_prob > 0.99:
+                    if adaptive_z > 2.0 and copula_prob > 0.99:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -3.0 and copula_prob < 0.01:
+                    elif adaptive_z < -2.0 and copula_prob < 0.01:
                         signal = "LONG SPREAD"
 
             # Store mapping detais for portfolio lifecycle calculations
@@ -339,8 +366,18 @@ class PortfolioManager:
     def _open_position(self, pair_key, signal, beta, price_a, price_b, date):
             # Calculate exactly how many shares we handle based on our allocation budget
             # For simplicity, allocating standard capital to Leg A, weighted by beta to Leg B
-            shares_a = self.allocation / price_a
-            shares_b = (self.allocation * beta) / price_b
+            
+            # 1. Allocate 10% of current available equity to this trade
+            allocation = self.capital * 0.10
+
+            # 2. Beta-Weighted Dollar Allocation
+            # We need Value_A + Value_B = allocation, where Value_B = Value_A * abs(beta)
+            value_a = allocation / (1 + abs(beta))
+            value_b = allocation - value_a # This equals value_a * abs(beta)
+
+            # 3. Convert locked dollar allocations into physical shares
+            shares_a = value_a / price_a
+            shares_b = value_b / price_b
 
             self.active_positions[pair_key] = {
                 "signal": signal,
@@ -391,15 +428,18 @@ class PortfolioManager:
             return unrealised
 
 if __name__ == "__main__":
-    print("Fetching historical data...")
-    test_tickers = ["JPM", "BAC", "C", "WFC", "GS", "XOM", "CVX", "COP", "EOG", "OXY"]
+    import os
 
-    # Download 3 years of daily close data
-    real_prices = yf.download(test_tickers, start="2020-01-01", end="2023-01-01", auto_adjust=False)['Adj Close']
+    CACHE_FILENAME = "sp500_historical_data.csv"
 
-    # Drop columns that failed to download or have massive missing data
-    real_prices = real_prices.dropna(axis=1)
+    if not os.path.exists(CACHE_FILENAME):
+        print(f"ERROR: '{CACHE_FILENAME}' not found.")
+        print("Please run 'data_manager.py' first to download the S&P 500 dataset.")
+    else:
+        print(f"Loading institutional dataset from local cache: {CACHE_FILENAME}...")
+        # Load the massive CSV instantly into Pandas
+        real_prices = pd.read_csv(CACHE_FILENAME, index_col=0, parse_dates=True)
 
-    # Start the engine with real data
-    backtester = WalkForwardBacktester(real_prices)
-    backtester.execute_simulation()
+        # Start the engine with S&P 500 data
+        backtester = WalkForwardBacktester(real_prices)
+        backtester.execute_simulation()

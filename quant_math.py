@@ -84,7 +84,7 @@ def cointegration_test(price_a, price_b):
 
     #return p_value
 
-    return p_value < 0.10, p_value
+    return p_value < 0.05, p_value
 
 def estimate_beta(price_a, price_b):
     y = np.log(price_a)
@@ -113,7 +113,7 @@ def adf_test(spread):
     result = adfuller(spread)
     p_value = result[1]
 
-    return p_value < 0.10, p_value
+    return p_value < 0.05, p_value
 
 #def test_pair(price_a, price_b):
     #score, pvalue, critical_values = coint(
