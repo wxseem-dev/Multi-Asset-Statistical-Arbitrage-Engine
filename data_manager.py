@@ -30,7 +30,7 @@ if __name__ == "__main__":
     print(f"Downloading historical data for {len(all_tickers)} tickers from Yahoo Finance...")
     
     # Using 2020 to 2023 to match your backtest window
-    data = yf.download(all_tickers, start="2020-01-01", end="2023-01-01", auto_adjust=False)
+    data = yf.download(all_tickers, start="2023-01-01", end="2026-01-01", auto_adjust=False)
     
     prices = data["Adj Close"]
     

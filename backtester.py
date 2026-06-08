@@ -6,9 +6,9 @@ from tqdm import tqdm
 import yfinance as yf
 
 class KalmanPairTracker:
-    def __init__(self, intial_beta, intial_mu):
+    def __init__(self, initial_beta, initial_mu):
         # State vector: [beta, mu] -> [hedge_ratio, intercept]
-        self.state_mean = np.array([[intial_beta], [intial_mu]])
+        self.state_mean = np.array([[initial_beta], [initial_mu]])
 
         # State covariance matrix (how uncertain are we about our state?)
         self.state_cov = np.zeros((2, 2))
@@ -216,7 +216,7 @@ class WalkForwardBacktester:
             self.active_order_book = results_df.head(10).to_dict('records')
 
             for pair in self.active_order_book:
-                pair['kalman'] = KalmanPairTracker(intial_beta=pair['beta'], intial_mu=pair['mu'])
+                pair['kalman'] = KalmanPairTracker(initial_beta=pair['beta'], initial_mu=pair['mu'])
 
             print(f" -> SUCCESS! Selected new Top {len(self.active_order_book)} pairs.")
         else:
@@ -301,12 +301,14 @@ class WalkForwardBacktester:
                         signal = "LONG REDIRECT"
                         signal = "LONG SPREAD"
                 
-                elif self.current_regime == "PANIC":
+                #elif self.current_regime == "PANIC":
                     # Demand high margins of safety in structural high vol panic regimes
-                    if adaptive_z > 2.0 and copula_prob > 0.99:
-                        signal = "SHORT SPREAD"
-                    elif adaptive_z < -2.0 and copula_prob < 0.01:
-                        signal = "LONG SPREAD"
+                    #if adaptive_z > 2.0 and copula_prob > 0.99:
+                        #signal = "SHORT SPREAD"
+                    #elif adaptive_z < -2.0 and copula_prob < 0.01:
+                        #signal = "LONG SPREAD"
+                elif self.current_regime == "PANIC":
+                    signal = "WATCH"
 
             # Store mapping detais for portfolio lifecycle calculations
             daily_signals[pair_key] = {
@@ -401,24 +403,30 @@ class WalkForwardBacktester:
         avg_return = equity_df["daily_pct"].mean()
         std_return = equity_df["daily_pct"].std()
 
-        # Annualised Sharpe (Assuming risk-free rate = 0, 252 business days)
-        if std_return > 0:
-            sharpe_ratio = (avg_return / std_return) * np.sqrt(252)
-        else:
-            sharpe_ratio = 0.0
+        # Calculate Downside deviation for sortino
+        downside_returns = equity_df[equity_df["daily_pct"] < 0]["daily_pct"]
+        downside_std = downside_returns.std()
+
+        sharpe_ratio = (avg_return / std_return) * np.sqrt(252) if std_return > 0 else 0.0
+        sortino_ratio = (avg_return / downside_std) * np.sqrt(252) if downside_std > 0 else 0.0
         
         # 4. Max Drawdown
         equity_df["peak"] = equity_df["equity"].cummax()
         equity_df["drawdown"] = (equity_df["equity"] - equity_df["peak"]) / equity_df["peak"]
         max_drawdown = equity_df["drawdown"].min() * 100
 
+        total_fees = trades_df["borrow_fees_paid"].sum() if "borrow_fees_paid" in trades_df.columns else 0.0
+
         print(f"Initial Capital:        ${self.initial_capital:,.2f}")
         print(f"Ending Capital:         ${ending_capital:,.2f}")
         print(f"Total Net Return:       {total_return:.2f}%")
         print(f"Max Peak-to-Trough DD:  {max_drawdown:.2f}%")
-        print(f"Annualized Sharpe:      {sharpe_ratio:.2f}")
+        print(f"Total Borrow Fees Paid: ${total_fees:,.2f}")
         print("-" * 50)
-        print(f"Total Completed Round-Trips: {total_trades}")
+        print(f"Annualized Sharpe:      {sharpe_ratio:.2f}")
+        print(f"Annualized Sortino:     {sortino_ratio:.2f}")
+        print("-" * 50)
+        print(f"Total Round-Trips:      {total_trades}")
         print(f"Win Rate:               {win_rate:.2f}%")
         print(f"Profit Factor:          {profit_factor:.2f}")
         print("="*50)
@@ -568,7 +576,10 @@ class PortfolioManager:
 
             SLIPPAGE_PCT = 0.00015 # 1.5 basis points per stock
             FLAT_COMMISSION = 1.00 # $1.00 execution fee per ticker
-            
+            ANNUAL_BORROW_RATE = 0.03 # 3% hard to borrow fee
+
+            days_held = max(1, (date - pos["entry_date"]).days)
+
             # Apply slippage to exit prices based on position type
             if pos["signal"] == "SHORT SPREAD":
                 # Buy back A (pay more), Sell out B (receive less)
@@ -590,7 +601,9 @@ class PortfolioManager:
                 total_trade_pnl = pnl_a + (-pnl_b)
 
             # Deduct exit commissions from the final trade PnL
+            borrow_fee_cost = (pos["allocation"] * (ANNUAL_BORROW_RATE / 365)) * days_held
             total_trade_pnl -= (FLAT_COMMISSION * 2)
+            total_trade_pnl -= borrow_fee_cost
 
             # Update physical cash account balance
             self.capital += total_trade_pnl
@@ -602,7 +615,8 @@ class PortfolioManager:
                 "type": pos["signal"],
                 "entry_date": pos["entry_date"],
                 "exit_date": date,
-                "pnl": total_trade_pnl
+                "pnl": total_trade_pnl,
+                "borrow_fees_paid": borrow_fee_cost
             })
         
     def _calculate_unrealised_pnl(self, today_prices):
