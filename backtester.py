@@ -11,7 +11,7 @@ class KalmanPairTracker:
         self.state_mean = np.array([[initial_beta], [initial_mu]])
 
         # State covariance matrix (how uncertain are we about our state?)
-        self.state_cov = np.zeros((2, 2))
+        self.state_cov = np.eye(2) * 1.0
 
         # Process Noise (how fast are the true beta/mu allowed to change over time)
         # Set very low so it doesn't overreact to daily noise
@@ -180,7 +180,7 @@ class WalkForwardBacktester:
             half_life = np.log(2) / kappa
 
             # Filter 4: Half-life bounds (10 to 60 days)
-            if not (1 <= half_life <= 90):
+            if not (5 <= half_life <= 40):
                 continue
             stats["hl_pass"] += 1
 
@@ -278,8 +278,7 @@ class WalkForwardBacktester:
                     signal = "WATCH" # Forces an immediate exit
                     is_toxic = True
                     print(f"      [!] STRUCTURAL BREAK on {pair_key} (Z={adaptive_z:.2f}). Forcing Exit.")
-
-                if entry_signal == "SHORT SPREAD":
+                elif entry_signal == "SHORT SPREAD":
                     # We shorted the spread; stay short until it falls back below mean zero
                     if adaptive_z <= 0.0:
                         signal = "WATCH" # Hits exit rule
