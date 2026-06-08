@@ -28,6 +28,10 @@ def build_universe():
     # Fetch the webpage content using equests with the custom header
     response = requests.get(url, headers=headers)
 
+    # Debugging:
+    print("Status:", response.status_code)
+    print(response.text[:500])
+
     df = pd.read_html(StringIO(response.text), flavor="bs4")[0]
     # Formatting to allow compatibility with the rest of the project
     df["Symbol"] = (

@@ -64,6 +64,12 @@ class WalkForwardBacktester:
         # historical_price_data - pandas datafrime where the index is dates and columns are tickers
 
         self.prices = historical_price_data
+        self.universe = self.prices.columns.tolist()
+
+        self.constituents = pd.read_csv(
+            "sp500_constituents.csv"
+        )
+
         self.all_dates = sorted(self.prices.index.unique())
 
         self.initial_capital = 1000000.0
@@ -87,6 +93,8 @@ class WalkForwardBacktester:
 
         print(f"\n[STRUCTURAL CLOCK] Rebalancing on {current_date.date()}...")
 
+        self.portfolio.blacklisted_pairs.clear()
+
         # 1. Slice the data safely (no lookahead bias)
         current_idx = self.all_dates.index(current_date)
         start_idx = max(0, current_idx - self.lookback_window)
@@ -96,7 +104,7 @@ class WalkForwardBacktester:
 
         # Detect Market Regime
         # Assuming you have SPY data in your historical slice, or use a proxy like JPM currently
-        market_proxy = historical_slice["JPM"].pct_change().dropna()
+        market_proxy = historical_slice.pct_change().mean(axis=1).dropna()
         self.current_regime = detect_market_regime(market_proxy)
 
         print(f" -> Detected Market Regime: {self.current_regime}")
@@ -104,8 +112,19 @@ class WalkForwardBacktester:
         # Mathematics
         print(" -> Building Universe & Generating Pairs...")
         
-        sp500_df = build_universe()
-        industry_dict = build_industry_universe(sp500_df)
+        #sp500_df = build_universe()
+        #industry_dict = build_industry_universe(sp500_df)
+
+        available = set(self.prices.columns)
+
+        filtered_constituents = self.constituents[
+            self.constituents["Symbol"].isin(available)
+        ]
+
+        industry_dict = build_industry_universe(
+            filtered_constituents
+        )
+
         all_possible_pairs = generate_pairs(industry_dict)
 
         results = []
@@ -252,10 +271,12 @@ class WalkForwardBacktester:
                 # path a: if we are already in this trade, we hold until it mean reverts back to zero (Z=0)
                 position_details = self.portfolio.active_positions[pair_key]
                 entry_signal = position_details["signal"]
+                is_toxic = False # default state before blacklisting if need be
 
                 # Hard Z-Score Stop-Loss (Structural Break)
                 if abs(adaptive_z) >= 3.5:
                     signal = "WATCH" # Forces an immediate exit
+                    is_toxic = True
                     print(f"      [!] STRUCTURAL BREAK on {pair_key} (Z={adaptive_z:.2f}). Forcing Exit.")
 
                 if entry_signal == "SHORT SPREAD":
@@ -292,7 +313,8 @@ class WalkForwardBacktester:
                 "signal": signal,
                 "beta": dynamic_beta,
                 "half_life": pair.get("half_life", 30),
-                "regime": self.current_regime
+                "regime": self.current_regime,
+                "is_toxic": is_toxic if is_currently_holding else False
             }
 
             print(f"    -> Pair {a}-{b} | Regime: {self.current_regime:6s} | ADAPTIVE Z: {adaptive_z: 5.2f} | Copula Prob: {copula_prob:.3f} | Decision: {signal}")
@@ -404,10 +426,12 @@ class WalkForwardBacktester:
 class PortfolioManager:
     def __init__(self, initial_capital=1000000.0, allocation_per_pair=100000.0):
         self.capital = initial_capital
+        self.available_cash = initial_capital
         self.allocation = allocation_per_pair
         self.active_positions = {} # Key: "A-B", Value: entry details
         self.pnl_history = [] # Tracks total portfolio value over time
         self.trade_log = [] # For auditing every trade later
+        self.blacklisted_pairs = set() # Memory state for broken pairs
 
     def execute_signals(self, current_date, daily_signals, today_prices):
             # Processes today's tactical signals to open, hold, or close positions
@@ -431,21 +455,33 @@ class PortfolioManager:
                 # Risk Management: Set a strict -5% Stop loss on deployed capital
                 max_loss_limit = -(pos["allocation"] * 0.05)
 
-                current_signal = daily_signals.get(pair_key, {}).get("signal", "WATCH")
+                current_signal_dict = daily_signals.get(pair_key, {})
+                current_signal = current_signal_dict.get("signal", "WATCH")
+                z_score_break = current_signal_dict.get("is_toxic", False)
+
+                hit_stop_loss = trade_pnl <= max_loss_limit
+                hit_time_stop = days_held > max_allowed_days
 
                 # Force exit if statistical mean-reversion completes (WATCH) OR if Risk limit is breached
-                if current_signal == "WATCH" or trade_pnl <= max_loss_limit or days_held > max_allowed_days:
+                if current_signal == "WATCH" or hit_stop_loss or hit_time_stop:
                     self._close_position(pair_key, today_prices[a], today_prices[b], current_date)
                     
-                    # Optional: Print a warning to the console so you can see the risk manager working
-                    if trade_pnl <= max_loss_limit:
-                        print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}: ${trade_pnl:.2f}")
-                    elif days_held > max_allowed_days:
-                        print(f"    [RISK MGR] TIME-STOP EXPIRED on {pair_key} ({days_held} days)")
+                    # Add to blacklist if it was a defensive exit
+                    if z_score_break or hit_stop_loss or hit_time_stop:
+                        self.blacklisted_pairs.add(pair_key)
+
+                        if hit_stop_loss:
+                            print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}. Banished.")
+                        elif hit_time_stop:
+                            print(f"    [RISK MGR] TIME-STOP EXPIRED on {pair_key}. Banished.")
             
             # 2. Check for new trade entries
             for pair_key, data in daily_signals.items():
                 if pair_key in self.active_positions:
+                    continue
+
+                # Block entry if the pair is currently blacklisted
+                if pair_key in self.blacklisted_pairs:
                     continue
 
                 # Hard cap on portfolio size and leverage check
@@ -464,7 +500,7 @@ class PortfolioManager:
                     if regime == "PANIC":
                         required_allocation *= 0.50
                         
-                    if self.capital >= required_allocation:
+                    if self.available_cash >= required_allocation:
                         self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date, half_life, regime)
                     else:
                         print(f"    [MARGIN LIMIT] Insufficient capital to open {pair_key}. Required: ${required_allocation:.2f}")
@@ -485,6 +521,9 @@ class PortfolioManager:
             # Regime-Conditional Scaling
             if regime == "PANIC":
                 allocation = allocation * 0.50
+
+            # Deduct the allocation from our liquid cash pool
+            self.available_cash -= allocation
 
             # Institutional friction parameters
             SLIPPAGE_PCT = 0.00015 # 1.5 basis points per stock
@@ -555,6 +594,8 @@ class PortfolioManager:
 
             # Update physical cash account balance
             self.capital += total_trade_pnl
+
+            self.available_cash += (pos["allocation"] + total_trade_pnl)
 
             self.trade_log.append({
                 "pair": pair_key,

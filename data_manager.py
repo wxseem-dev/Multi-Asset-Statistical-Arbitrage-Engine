@@ -20,6 +20,10 @@ if __name__ == "__main__":
     
     # 1. Get the tickers
     sp500_df = build_universe()
+    sp500_df.to_csv(
+        "sp500_constituents.csv",
+        index=False
+    )
     all_tickers = sp500_df["Symbol"].tolist()
 
     # 2. Download 3 years of historical data
@@ -38,5 +42,11 @@ if __name__ == "__main__":
     
     # 4. Save to disk
     prices.to_csv(CACHE_FILENAME)
+
+    pd.Series(prices.columns).to_csv(
+        "sp500_universe.csv",
+        index=False
+    )
+
     print(f"\nSUCCESS: Data saved locally to '{CACHE_FILENAME}'.")
     print(f"Total valid tickers saved: {len(prices.columns)}")
