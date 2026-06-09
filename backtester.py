@@ -300,7 +300,6 @@ class WalkForwardBacktester:
                     if adaptive_z > 1.75 and copula_prob > 0.95:
                         signal = "SHORT SPREAD"
                     elif adaptive_z < -1.75 and copula_prob < 0.05:
-                        signal = "LONG REDIRECT"
                         signal = "LONG SPREAD"
                 
                 #elif self.current_regime == "PANIC":
@@ -310,7 +309,10 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -2.0 and copula_prob < 0.01:
                         #signal = "LONG SPREAD"
                 elif self.current_regime == "PANIC":
-                    signal = "WATCH"
+                    if adaptive_z > 2.25 and copula_prob > 0.98:
+                        signal = "SHORT SPREAD"
+                    elif adaptive_z < -2.25 and copula_prob < 0.02:
+                        signal = "LONG SPREAD"
 
             # Store mapping detais for portfolio lifecycle calculations
             daily_signals[pair_key] = {
