@@ -104,8 +104,11 @@ class WalkForwardBacktester:
 
         # Detect Market Regime
         # Assuming you have SPY data in your historical slice, or use a proxy like JPM currently
-        market_proxy = historical_slice.pct_change().mean(axis=1).dropna()
-        self.current_regime = detect_market_regime(market_proxy)
+        if "SPY" in historical_slice.columns:
+            market_proxy = historical_slice["SPY"].pct_change().dropna()
+        else:
+            market_proxy = historical_slice.pct_change().median(axis=1).dropna()
+        self.current_regime = detect_market_regime(market_proxy, training_window=126)
 
         print(f" -> Detected Market Regime: {self.current_regime}")
 

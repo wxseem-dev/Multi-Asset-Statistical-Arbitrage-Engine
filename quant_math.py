@@ -359,15 +359,30 @@ def generate_signal(z_score, probability, z_threshold=2, probability_threshold=0
     #print(f"mu:    {column_means[1]:.4f}")
     #print(f"sigma: {column_means[2]:.4f}")
 
-def detect_market_regime(sp500_returns):
-    # Uses a Gaussian Hidden Markov Model to classify the market into 2 regimes:
-    # Regime 0: Low Volatility (Normal)
-    # Regime 1: High Volatility (Panic)
+def detect_market_regime(sp500_returns, training_window=126):
+    import warnings
 
-    # Reshape returns for the HMM model
-    returns_array = np.array(sp500_returns).reshape(-1, 1) * 100.0
+    returns_array = np.array(sp500_returns)
 
-    # Train a 2-state model
+    # a rolling 5 day realised volatility series as the hmm input feature
+    # raw returns are noisy and near-zero-mean, producing unstable Guassian states
+    # RV is always positive, monotonically related to stress, and separates cleanly
+    # into a low-vol NORMAL state and a high-vol PANIC state
+
+    vol_window = 5
+    rv_series = np.array([
+        np.std(returns_array[max(0, i - vol_window):i])
+        for i in range(1, len(returns_array) + 1)
+    ])
+
+    # Use only the most recent training_window days to avoid stale calibration
+    # 126 days (~6 months) keeps the model anchored to current conditions
+    rv_array = rv_series[-training_window:].reshape(-1, 1) * 100.0
+
+    # Require atleast 30 observations to fit anything meaningful
+    if len(rv_array) < 30:
+        return "NORMAL"
+    
     model = hmm.GaussianHMM(
         n_components=2,
         covariance_type="diag",
@@ -376,22 +391,26 @@ def detect_market_regime(sp500_returns):
         min_covar=1e-3
     )
 
-    import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
-        model.fit(returns_array)
+        model.fit(rv_array)
     
-    hidden_states = model.predict(returns_array)
+    hidden_states = model.predict(rv_array)
 
-    variances = np.array([np.diag(model.covars_[i]) for i in range(2)])
-    panic_state = np.argmax(variances)
+    # With RV as input, the PANIC state has a higher *mean* RV value.
+    # Use argmax(means) rather than argmax(covars) — it is the more direct
+    # signal when the input feature is already a volatility measure.
+    state_means = np.array([model.means_[i][0] for i in range(2)])
+    panic_state = np.argmax(state_means)
 
-    current_regime = hidden_states[-1]
-
-    if current_regime == panic_state:
+    # Smoothing: require 2 out of the last 3 decoded days to be PANIC
+    # before declaring the regime. Prevents a single bad day flipping strategy-wide behaviour.
+    recent_states = hidden_states[-3:]
+    if np.sum(recent_states == panic_state) >= 2:
         return "PANIC"
     else:
         return "NORMAL"
+    
 
 def calculate_copula_probability(spread, current_spread_val):
     # Transforms the historical spread into a uniform distribution [0,1] using a Student-t distirbution to account for fat tails, returning the probability CDF

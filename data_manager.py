@@ -24,7 +24,7 @@ if __name__ == "__main__":
         "sp500_constituents.csv",
         index=False
     )
-    all_tickers = sp500_df["Symbol"].tolist()
+    all_tickers = sp500_df["Symbol"].tolist() + ["SPY"]
 
     # 2. Download 3 years of historical data
     print(f"Downloading historical data for {len(all_tickers)} tickers from Yahoo Finance...")
