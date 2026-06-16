@@ -403,6 +403,9 @@ def detect_market_regime(sp500_returns, training_window=126):
     state_means = np.array([model.means_[i][0] for i in range(2)])
     panic_state = np.argmax(state_means)
 
+    if state_means[panic_state] < state_means[1 - panic_state] * 1.5:
+        return "NORMAL"
+
     # Smoothing: require 2 out of the last 3 decoded days to be PANIC
     # before declaring the regime. Prevents a single bad day flipping strategy-wide behaviour.
     recent_states = hidden_states[-3:]

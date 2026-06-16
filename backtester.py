@@ -93,7 +93,13 @@ class WalkForwardBacktester:
 
         print(f"\n[STRUCTURAL CLOCK] Rebalancing on {current_date.date()}...")
 
-        self.portfolio.blacklisted_pairs.clear()
+        #self.portfolio.blacklisted_pairs.clear()
+
+        self.portfolio.rebalance_count += 1
+        self.portfolio.blacklisted_pairs = {
+            k: v for k, v in self.portfolio.blacklisted_pairs.items()
+            if self.portfolio.rebalance_count - v < 2
+        }
 
         # 1. Slice the data safely (no lookahead bias)
         current_idx = self.all_dates.index(current_date)
@@ -193,7 +199,7 @@ class WalkForwardBacktester:
             prob = reversion_probability(latest_spread, kappa, mu, sigma)
 
             # Only keep things with a decent z_score
-            if abs(z_score) < 1.5:
+            if not (1.5 <= abs(z_score) <= 3.5):
                 continue
                 
             results.append({
@@ -297,9 +303,14 @@ class WalkForwardBacktester:
             else:
                 # PATH B: If we do NOT have an open position, evaluate standard regime-aware entry triggers
                 if self.current_regime == "NORMAL":
-                    if adaptive_z > 1.75 and copula_prob > 0.95:
+                    #if adaptive_z > 1.75 and copula_prob > 0.95:
+                        #signal = "SHORT SPREAD"
+                    #elif adaptive_z < -1.75 and copula_prob < 0.05:
+                        #signal = "LONG SPREAD"
+
+                    if adaptive_z > 1.75:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -1.75 and copula_prob < 0.05:
+                    elif adaptive_z < -1.75:
                         signal = "LONG SPREAD"
                 
                 #elif self.current_regime == "PANIC":
@@ -309,9 +320,14 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -2.0 and copula_prob < 0.01:
                         #signal = "LONG SPREAD"
                 elif self.current_regime == "PANIC":
-                    if adaptive_z > 2.25 and copula_prob > 0.98:
+                    #if adaptive_z > 2.25 and copula_prob > 0.98:
+                        #signal = "SHORT SPREAD"
+                    #elif adaptive_z < -2.25 and copula_prob < 0.02:
+                        #signal = "LONG SPREAD"
+
+                    if adaptive_z > 2.25:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -2.25 and copula_prob < 0.02:
+                    elif adaptive_z < -2.25:
                         signal = "LONG SPREAD"
 
             # Store mapping detais for portfolio lifecycle calculations
@@ -443,7 +459,10 @@ class PortfolioManager:
         self.active_positions = {} # Key: "A-B", Value: entry details
         self.pnl_history = [] # Tracks total portfolio value over time
         self.trade_log = [] # For auditing every trade later
-        self.blacklisted_pairs = set() # Memory state for broken pairs
+        #self.blacklisted_pairs = set() # Memory state for broken pairs
+        self.blacklisted_pairs = {}
+        self.rebalance_count = 0
+
 
     def execute_signals(self, current_date, daily_signals, today_prices):
             # Processes today's tactical signals to open, hold, or close positions
@@ -479,14 +498,27 @@ class PortfolioManager:
                     self._close_position(pair_key, today_prices[a], today_prices[b], current_date)
                     
                     # Add to blacklist if it was a defensive exit
-                    if z_score_break or hit_stop_loss or hit_time_stop:
-                        self.blacklisted_pairs.add(pair_key)
+                    #if z_score_break or hit_stop_loss or hit_time_stop:
+                        #self.blacklisted_pairs.add(pair_key)
+                        
+                        #self.blacklisted_pairs[pair_key] = self.rebalance_count
 
+                        #if hit_stop_loss:
+                            #print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}. Banished.")
+                        #elif hit_time_stop:
+                            #print(f"    [RISK MGR] TIME-STOP EXPIRED on {pair_key}. Banished.")
+
+                    last_pnl = self.trade_log[-1]["pnl"] if self.trade_log else 0
+
+                    if z_score_break or hit_stop_loss or hit_time_stop or last_pnl < 0:
+                        self.blacklisted_pairs[pair_key] = self.rebalance_count
                         if hit_stop_loss:
-                            print(f"    [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}. Banished.")
+                            print(f" [RISK MGR] STOP-LOSS TRIGGERED on {pair_key}. Banished")
                         elif hit_time_stop:
-                            print(f"    [RISK MGR] TIME-STOP EXPIRED on {pair_key}. Banished.")
-            
+                            print(f" [RISK MGR] TIME-STOP EXPIRED on {pair_key}. Banished")
+                        elif last_pnl < 0:
+                            print(f" [RISK MGR] LOSS EXIT on {pair_key} (PnL={last_pnl:.2f}). Banished")
+
             # 2. Check for new trade entries
             for pair_key, data in daily_signals.items():
                 if pair_key in self.active_positions:
