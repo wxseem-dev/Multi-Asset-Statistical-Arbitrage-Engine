@@ -44,8 +44,12 @@ class KalmanPairTracker:
         # The 'error' is our instantaneous spread
         error = y_t - predicted_y
 
+        print(" [KalmanPairTracker] Error:", error)
+
         # Variance of the prediction
         Q_t = F_t.dot(predicted_state_cov).dot(F_t.T)[0, 0] + self.Vv
+
+        print(" [KalmanPairTracker] Q_t:", Q_t)
 
         # Kalman Gain (how much should we care about today's error?)
         kalman_gain = predicted_state_cov.dot(F_t.T) / Q_t
@@ -199,7 +203,7 @@ class WalkForwardBacktester:
             prob = reversion_probability(latest_spread, kappa, mu, sigma)
 
             # Only keep things with a decent z_score
-            if not (1.5 <= abs(z_score) <= 3.5):
+            if abs(z_score) > 3.5:
                 continue
                 
             results.append({
