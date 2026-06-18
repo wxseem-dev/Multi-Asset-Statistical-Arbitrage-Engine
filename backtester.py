@@ -44,12 +44,12 @@ class KalmanPairTracker:
         # The 'error' is our instantaneous spread
         error = y_t - predicted_y
 
-        print(" [KalmanPairTracker] Error:", error)
+        #print(" [KalmanPairTracker] Error:", error)
 
         # Variance of the prediction
         Q_t = F_t.dot(predicted_state_cov).dot(F_t.T)[0, 0] + self.Vv
 
-        print(" [KalmanPairTracker] Q_t:", Q_t)
+        #print(" [KalmanPairTracker] Q_t:", Q_t)
 
         # Kalman Gain (how much should we care about today's error?)
         kalman_gain = predicted_state_cov.dot(F_t.T) / Q_t
@@ -321,9 +321,14 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -1.75 and copula_prob < 0.05:
                         #signal = "LONG SPREAD"
 
-                    if adaptive_z > 1.75:
+                    #if adaptive_z > 1.75:
+                        #signal = "SHORT SPREAD"
+                    #elif adaptive_z < -1.75:
+                        #signal = "LONG SPREAD"
+
+                    if 1.75 < adaptive_z <= 3.5:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -1.75:
+                    elif -3.5 <= adaptive_z < -1.75:
                         signal = "LONG SPREAD"
                 
                 #elif self.current_regime == "PANIC":
@@ -338,9 +343,14 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -2.25 and copula_prob < 0.02:
                         #signal = "LONG SPREAD"
 
-                    if adaptive_z > 2.25:
+                    #if adaptive_z > 2.25:
+                        #signal = "SHORT SPREAD"
+                    #elif adaptive_z < -2.25:
+                        #signal = "LONG SPREAD"
+
+                    if 2.25 < adaptive_z <= 3.5:
                         signal = "SHORT SPREAD"
-                    elif adaptive_z < -2.25:
+                    elif -3.5 <= adaptive_z < -2.25:
                         signal = "LONG SPREAD"
 
             # Store mapping detais for portfolio lifecycle calculations
