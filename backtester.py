@@ -61,7 +61,7 @@ class KalmanPairTracker:
         # The adaptive Z-score is simply the error divided by its standard deviation
         adaptive_z_score = error / np.sqrt(Q_t)
 
-        return adaptive_z_score, self.state_mean[0,0] # Returns Z-score and the new Beta
+        return error, self.state_mean[0,0] # Returns Z-score and the new Beta
 
 class WalkForwardBacktester:
     def __init__(self, historical_price_data):
@@ -206,9 +206,11 @@ class WalkForwardBacktester:
             if abs(z_score) > 3.5:
                 continue
                 
+            sigma_stationary = sigma / np.sqrt(2 * kappa)
             results.append({
                 "ticker_a": a, "ticker_b": b, "industry": industry,
                 "beta": beta, "mu": mu, "sigma": sigma, "kappa": kappa,
+                "sigma_stationary": sigma_stationary,   # NEW — pair-specific, fixed at selection
                 "half_life": half_life,
                 "z_score": z_score, "reversion_probability": prob,
                 "signal_strength": abs(z_score * prob)
@@ -260,7 +262,14 @@ class WalkForwardBacktester:
 
             # 1. Kalman Filter Adaptive Z-Score
             kf = pair['kalman']
-            adaptive_z, dynamic_beta = kf.update(today_prices[a], today_prices[b])
+            #adaptive_z, dynamic_beta = kf.update(today_prices[a], today_prices[b])
+            spread_error, dynamic_beta = kf.update(today_prices[a], today_prices[b])
+
+            # Pair-specific normalization — every pair gets judged against its OWN
+            # historical spread volatility instead of a near-identical Kalman floor.
+            adaptive_z = spread_error / pair['sigma_stationary']
+
+            print(f"      [DIAG] {pair_key} raw_error={spread_error:.5f} sigma_stat={pair['sigma_stationary']:.5f} new_z={adaptive_z:.3f}")
 
             # 2. Re-create the dynamic spread for copula evaluation
             today_spread = np.log(today_prices[a]) - dynamic_beta * np.log(today_prices[b])
