@@ -269,7 +269,7 @@ class WalkForwardBacktester:
             # historical spread volatility instead of a near-identical Kalman floor.
             adaptive_z = spread_error / pair['sigma_stationary']
 
-            print(f"      [DIAG] {pair_key} raw_error={spread_error:.5f} sigma_stat={pair['sigma_stationary']:.5f} new_z={adaptive_z:.3f}")
+            #print(f"      [DIAG] {pair_key} raw_error={spread_error:.5f} sigma_stat={pair['sigma_stationary']:.5f} new_z={adaptive_z:.3f}")
 
             # 2. Re-create the dynamic spread for copula evaluation
             today_spread = np.log(today_prices[a]) - dynamic_beta * np.log(today_prices[b])
