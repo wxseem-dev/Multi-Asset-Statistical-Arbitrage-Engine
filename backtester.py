@@ -4,6 +4,8 @@ import requests
 from quant_math import build_universe, build_industry_universe, generate_pairs, align_prices, correlation_filter, cointegration_test, estimate_beta, spread_construction, adf_test, neg_log_likelihood, calibrate_ou, reversion_probability, compute_z_score, generate_signal, detect_market_regime, calculate_copula_probability
 from tqdm import tqdm
 import yfinance as yf
+from win10toast import ToastNotifier
+import pyttsx3
 
 class KalmanPairTracker:
     def __init__(self, initial_beta, initial_mu):
