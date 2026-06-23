@@ -694,6 +694,9 @@ class PortfolioManager:
                 
             return unrealised
 
+toast = ToastNotifier()
+engine = pyttsx3.init()
+
 if __name__ == "__main__":
     import os
 
@@ -708,5 +711,28 @@ if __name__ == "__main__":
         real_prices = pd.read_csv(CACHE_FILENAME, index_col=0, parse_dates=True)
 
         # Start the engine with S&P 500 data
-        backtester = WalkForwardBacktester(real_prices)
-        backtester.execute_simulation()
+        try:
+            backtester = WalkForwardBacktester(real_prices)
+            backtester.execute_simulation()
+
+            toast.show_toast(
+                "Backtester",
+                "Simulation completed successfully",
+                duration=10
+            )
+
+            engine.say("Backtest completed")
+        
+        except Exception as e:
+            toast.show_toast(
+                "Backtester",
+                f"Simulation failed: {type(e).__name__}",
+                duration=15
+            )
+
+            engine.say("Backtest failed")
+
+            raise
+            
+        finally:
+            engine.runAndWait()
