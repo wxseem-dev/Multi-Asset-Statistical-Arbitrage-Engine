@@ -389,7 +389,7 @@ def detect_market_regime(sp500_returns, training_window=126):
         n_iter=500,
         tol=1e-3,
         min_covar=1e-3,
-        random_state=4
+        random_state=10
     )
 
     with warnings.catch_warnings():

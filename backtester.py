@@ -4,8 +4,9 @@ import requests
 from quant_math import build_universe, build_industry_universe, generate_pairs, align_prices, correlation_filter, cointegration_test, estimate_beta, spread_construction, adf_test, neg_log_likelihood, calibrate_ou, reversion_probability, compute_z_score, generate_signal, detect_market_regime, calculate_copula_probability
 from tqdm import tqdm
 import yfinance as yf
-from win10toast import ToastNotifier
+#from win10toast import ToastNotifier
 import pyttsx3
+from plyer import notification
 
 class KalmanPairTracker:
     def __init__(self, initial_beta, initial_mu):
@@ -694,7 +695,7 @@ class PortfolioManager:
                 
             return unrealised
 
-toast = ToastNotifier()
+#toast = ToastNotifier()
 engine = pyttsx3.init()
 
 if __name__ == "__main__":
@@ -715,19 +716,31 @@ if __name__ == "__main__":
             backtester = WalkForwardBacktester(real_prices)
             backtester.execute_simulation()
 
-            toast.show_toast(
-                "Backtester",
-                "Simulation completed successfully",
-                duration=10
+            #toast.show_toast(
+                #"Backtester",
+                #"Simulation completed successfully",
+                #duration=10
+            #)
+
+            notification.notify(
+                title="Backtester",
+                message="Simulation complete",
+                timeout=10
             )
 
             engine.say("Backtest completed")
         
         except Exception as e:
-            toast.show_toast(
-                "Backtester",
-                f"Simulation failed: {type(e).__name__}",
-                duration=15
+            #toast.show_toast(
+                #"Backtester",
+                #f"Simulation failed: {type(e).__name__}",
+                #duration=15
+            #)
+
+            notification.notify(
+                title="Backtester",
+                message=f"Simulation failed: {type(e).__name__}",
+                timeout=10
             )
 
             engine.say("Backtest failed")
