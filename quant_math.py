@@ -359,7 +359,7 @@ def generate_signal(z_score, probability, z_threshold=2, probability_threshold=0
     #print(f"mu:    {column_means[1]:.4f}")
     #print(f"sigma: {column_means[2]:.4f}")
 
-def detect_market_regime(sp500_returns, training_window=126):
+def detect_market_regime(sp500_returns, training_window=126, n_restarts=10):
     import warnings
 
     returns_array = np.array(sp500_returns)
@@ -383,19 +383,35 @@ def detect_market_regime(sp500_returns, training_window=126):
     if len(rv_array) < 30:
         return "NORMAL"
     
-    model = hmm.GaussianHMM(
-        n_components=2,
-        covariance_type="diag",
-        n_iter=500,
-        tol=1e-3,
-        min_covar=1e-3,
-        random_state=20
-    )
+    #model = hmm.GaussianHMM(
+        #n_components=2,
+        #covariance_type="diag",
+        #n_iter=500,
+        #tol=1e-3,
+        #min_covar=1e-3,
+        #random_state=20
+    #)
 
+    best_model, best_score = None, -np.inf
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
-        model.fit(rv_array)
-    
+        for seed in range(n_restarts): # why n_restarts being 10?
+            candidate = hmm.GaussianHMM(
+                n_components=2,
+                covariance_type="diag",
+                n_iter=500,
+                tol=1e-3,
+                min_covar=1e-3,
+                random_state=seed
+            )
+
+            candidate.fit(rv_array)
+            score = candidate.score(rv_array)
+            if score > best_score:
+                best_score = score
+                best_model = candidate
+
+    model = best_model
     hidden_states = model.predict(rv_array)
 
     # With RV as input, the PANIC state has a higher *mean* RV value.
