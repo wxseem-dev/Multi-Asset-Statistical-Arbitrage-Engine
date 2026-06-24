@@ -359,7 +359,7 @@ def generate_signal(z_score, probability, z_threshold=2, probability_threshold=0
     #print(f"mu:    {column_means[1]:.4f}")
     #print(f"sigma: {column_means[2]:.4f}")
 
-def detect_market_regime(sp500_returns, training_window=126, n_restarts=10):
+def detect_market_regime(sp500_returns, training_window=126, n_restarts=20):
     import warnings
 
     returns_array = np.array(sp500_returns)
@@ -413,6 +413,8 @@ def detect_market_regime(sp500_returns, training_window=126, n_restarts=10):
 
     model = best_model
     hidden_states = model.predict(rv_array)
+
+    print("Best score:", best_score)
 
     # With RV as input, the PANIC state has a higher *mean* RV value.
     # Use argmax(means) rather than argmax(covars) — it is the more direct
