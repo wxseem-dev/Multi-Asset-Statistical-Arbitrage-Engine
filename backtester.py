@@ -67,33 +67,75 @@ class KalmanPairTracker:
         return error, self.state_mean[0,0] # Returns Z-score and the new Beta
 
 class WalkForwardBacktester:
-    def __init__(self, historical_price_data):
+    def __init__(self, historical_price_data, config=None):
         # historical_price_data - pandas datafrime where the index is dates and columns are tickers
+
+        #self.prices = historical_price_data
+        #self.universe = self.prices.columns.tolist()
+
+        #self.constituents = pd.read_csv(
+            #"sp500_constituents.csv"
+        #)
+
+        #self.all_dates = sorted(self.prices.index.unique())
+
+        #self.initial_capital = 1000000.0
+        #self.capital = self.initial_capital
+        #self.trade_log = []
+        #self.active_positions = {}
+
+        # Track daily equity curve
+        #self.equity_curve = []
+
+        # Portfolio State
+        #self.active_order_book = [] # Will hold top 10 pairs
+        #self.rebalance_frequency = 21 # Run the heavy maths every 21 days (~ 1 month)
+        #self.lookback_window = 252 # Use 1 year of data to recalibrate
+
+        # Initialise our portfolio manager ledger
+        #self.portfolio = PortfolioManager(self.initial_capital, allocation_per_pair=100000.0)
+
+        # Parameter Defaults -------------------------
+        # Hardcoded constants
+        DEFAULTS = {
+            "constituents_path": "sp500_constituents.csv",
+            "initial_capital": 1000000.0,
+            "lookback_window": 252,
+            "rebal_freq": 21,
+            "corr_threshold": 0.60,
+            "min_hl": 5.0,
+            "max_hl": 40.0,
+            "max_z": 3.5,
+            "normal_z": 1.75,
+            "panic_z": 2.25,
+            "hmm_window": 126,
+            "hmm_restarts": 20,
+            "stop_loss_pct": 0.05,
+            "position_size_pct": 0.10,
+            "panic_size_mult": 0.50,
+            "max_concurrent": 10,
+        }
+        self.cfg = {**DEFAULTS, **(config or {})}
 
         self.prices = historical_price_data
         self.universe = self.prices.columns.tolist()
 
-        self.constituents = pd.read_csv(
-            "sp500_constituents.csv"
-        )
+        self.constituents = pd.read_csv(self.cfg["constituents_path"])
 
         self.all_dates = sorted(self.prices.index.unique())
 
-        self.initial_capital = 1000000.0
+        self.initial_capital = self.cfg["initial_capital"]
         self.capital = self.initial_capital
         self.trade_log = []
-        self.active_positions = {}
-
-        # Track daily equity curve
+        self.active_order_book = []
         self.equity_curve = []
+        self.active_positions = {}
+        self.rebalance_frequency = self.cfg["rebal_freq"]
+        self.lookback_window = self.cfg["lookback_window"]
 
-        # Portfolio State
-        self.active_order_book = [] # Will hold top 10 pairs
-        self.rebalance_frequency = 21 # Run the heavy maths every 21 days (~ 1 month)
-        self.lookback_window = 252 # Use 1 year of data to recalibrate
-
-        # Initialise our portfolio manager ledger
-        self.portfolio = PortfolioManager(self.initial_capital, allocation_per_pair=100000.0)
+        self.portfolio = PortfolioManager(
+            self.initial_capital, cfg = self.cfg
+        )
 
     def run_structural_rebalance(self, current_date):
         # Monthly clock: stop the belt, look back 1 year and pick the top 10 again
@@ -121,7 +163,14 @@ class WalkForwardBacktester:
             market_proxy = historical_slice["SPY"].pct_change().dropna()
         else:
             market_proxy = historical_slice.pct_change().median(axis=1).dropna()
-        self.current_regime = detect_market_regime(market_proxy, training_window=126)
+        
+        #self.current_regime = detect_market_regime(market_proxy, training_window=126)
+
+        self.current_regime = detect_market_regime(
+            market_proxy,
+            training_window = self.cfg["hmm_window"],
+            n_restarts = self.cfg["hmm_restarts"]
+        )
 
         print(f" -> Detected Market Regime: {self.current_regime}")
 
@@ -166,7 +215,7 @@ class WalkForwardBacktester:
             price_a, price_b = align_prices(historical_slice[a], historical_slice[b])
 
             # Filter 1: Correlation
-            if not correlation_filter(price_a, price_b, threshold=0.6):
+            if not correlation_filter(price_a, price_b, threshold=self.cfg["corr_threshold"]):
                 continue
             stats["corr_pass"] += 1
 
@@ -196,7 +245,7 @@ class WalkForwardBacktester:
             half_life = np.log(2) / kappa
 
             # Filter 4: Half-life bounds (10 to 60 days)
-            if not (5 <= half_life <= 40):
+            if not (self.cfg["min_hl"] <= half_life <= self.cfg["max_hl"]):
                 continue
             stats["hl_pass"] += 1
 
@@ -206,7 +255,7 @@ class WalkForwardBacktester:
             prob = reversion_probability(latest_spread, kappa, mu, sigma)
 
             # Only keep things with a decent z_score
-            if abs(z_score) > 3.5:
+            if abs(z_score) > self.cfg["max_z"]:
                 continue
                 
             sigma_stationary = sigma / np.sqrt(2 * kappa)
@@ -299,7 +348,7 @@ class WalkForwardBacktester:
                 is_toxic = False # default state before blacklisting if need be
 
                 # Hard Z-Score Stop-Loss (Structural Break)
-                if abs(adaptive_z) >= 3.5:
+                if abs(adaptive_z) >= self.cfg["max_z"]:
                     signal = "WATCH" # Forces an immediate exit
                     is_toxic = True
                     print(f"      [!] STRUCTURAL BREAK on {pair_key} (Z={adaptive_z:.2f}). Forcing Exit.")
@@ -329,9 +378,9 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -1.75:
                         #signal = "LONG SPREAD"
 
-                    if 1.75 < adaptive_z <= 3.5:
+                    if self.cfg["normal_z"] < adaptive_z <= self.cfg["max_z"]:
                         signal = "SHORT SPREAD"
-                    elif -3.5 <= adaptive_z < -1.75:
+                    elif -self.cfg["max_z"] <= adaptive_z < -self.cfg["normal_z"]:
                         signal = "LONG SPREAD"
                 
                 #elif self.current_regime == "PANIC":
@@ -351,9 +400,9 @@ class WalkForwardBacktester:
                     #elif adaptive_z < -2.25:
                         #signal = "LONG SPREAD"
 
-                    if 2.25 < adaptive_z <= 3.5:
+                    if self.cfg["panic_z"] < adaptive_z <= self.cfg["max_z"]:
                         signal = "SHORT SPREAD"
-                    elif -3.5 <= adaptive_z < -2.25:
+                    elif -self.cfg["max_z"] <= adaptive_z < -self.cfg["panic_z"]:
                         signal = "LONG SPREAD"
 
             # Store mapping detais for portfolio lifecycle calculations
@@ -478,10 +527,17 @@ class WalkForwardBacktester:
         print("="*50)
 
 class PortfolioManager:
-    def __init__(self, initial_capital=1000000.0, allocation_per_pair=100000.0):
+    def __init__(self, initial_capital=1000000.0, cfg=None):
+        self.cfg = cfg or {
+            "stop_loss_pct": 0.05,
+            "position_size_pct": 0.10,
+            "panic_size_mult": 0.50,
+            "max_concurrent": 10
+        }
+        
         self.capital = initial_capital
         self.available_cash = initial_capital
-        self.allocation = allocation_per_pair
+        self.allocation = 100000.0
         self.active_positions = {} # Key: "A-B", Value: entry details
         self.pnl_history = [] # Tracks total portfolio value over time
         self.trade_log = [] # For auditing every trade later
@@ -510,7 +566,7 @@ class PortfolioManager:
                 trade_pnl = ((-pnl_a) + pnl_b) if pos["signal"] == "SHORT SPREAD" else (pnl_a + (-pnl_b))
 
                 # Risk Management: Set a strict -5% Stop loss on deployed capital
-                max_loss_limit = -(pos["allocation"] * 0.05)
+                max_loss_limit = -(pos["allocation"] * self.cfg["stop_loss_pct"])
 
                 current_signal_dict = daily_signals.get(pair_key, {})
                 current_signal = current_signal_dict.get("signal", "WATCH")
@@ -555,7 +611,7 @@ class PortfolioManager:
                     continue
 
                 # Hard cap on portfolio size and leverage check
-                MAX_CONCURRENT_TRADES = 10
+                MAX_CONCURRENT_TRADES = self.cfg["max_concurrent"]
                 if len(self.active_positions) >= MAX_CONCURRENT_TRADES:
                     continue # skip entry, portfolio is full
                     
@@ -566,9 +622,9 @@ class PortfolioManager:
                 a, b = pair_key.split("-")
 
                 if signal in ["SHORT SPREAD", "LONG SPREAD"]:
-                    required_allocation = self.capital * 0.10
+                    required_allocation = self.capital * self.cfg["position_size_pct"]
                     if regime == "PANIC":
-                        required_allocation *= 0.50
+                        required_allocation *= self.cfg["panic_size_mult"]
                         
                     if self.available_cash >= required_allocation:
                         self._open_position(pair_key, signal, beta, today_prices[a], today_prices[b], current_date, half_life, regime)
@@ -586,11 +642,11 @@ class PortfolioManager:
             # For simplicity, allocating standard capital to Leg A, weighted by beta to Leg B
             
             # 1. Allocate 10% of current available equity to this trade
-            allocation = self.capital * 0.10
+            allocation = self.capital * self.cfg["position_size_pct"]
 
             # Regime-Conditional Scaling
             if regime == "PANIC":
-                allocation = allocation * 0.50
+                allocation = allocation * self.cfg["panic_size_mult"]
 
             # Deduct the allocation from our liquid cash pool
             self.available_cash -= allocation
@@ -695,11 +751,11 @@ class PortfolioManager:
                 
             return unrealised
 
-#toast = ToastNotifier()
-engine = pyttsx3.init()
-
 if __name__ == "__main__":
     import os
+
+    #toast = ToastNotifier()
+    engine = pyttsx3.init()
 
     CACHE_FILENAME = "sp500_historical_data.csv"
 
