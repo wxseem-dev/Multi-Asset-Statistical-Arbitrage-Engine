@@ -402,7 +402,7 @@ class BacktestApp(ctk.CTk):
             lbl.configure(text="--", text_color="#2a4a6a")
 
         # drain any messages left in the queue from the previous run
-        while not self._log_queue_empty():
+        while not self._log_queue.empty():
             try:
                 self._log_queue.get_nowait()
             except queue.Empty:
