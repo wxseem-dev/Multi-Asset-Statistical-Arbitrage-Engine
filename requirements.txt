@@ -1,0 +1,12 @@
+customtkinter
+hmmlearn
+matplotlib
+numpy
+pandas
+plyer
+pyttsx3
+requests
+scipy
+statsmodels
+tqdm
+yfinance

@@ -140,7 +140,7 @@ class BacktestApp(ctk.CTk):
 
         def section(title):
             nonlocal row
-            ctk.CTkFrame(sidebar, height=1, fg_color="1e3a5f").grid(
+            ctk.CTkFrame(sidebar, height=1, fg_color="#1e3a5f").grid(
                 row=row, column=0, sticky="ew", padx=16, pady=(12,4)
             )
             row += 1
@@ -529,7 +529,7 @@ class BacktestApp(ctk.CTk):
         self._metric_lbls["Borrow Fees"].configure(
             text=f"${fees:,.0f}",         text_color="#ffb74d")
     
-    if __name__ == "__main__":
-        app = BacktestApp()
-        app.mainloop()
+if __name__ == "__main__":
+    app = BacktestApp()
+    app.mainloop()
 
