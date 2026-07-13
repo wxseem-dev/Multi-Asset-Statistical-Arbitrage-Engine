@@ -1,25 +1,37 @@
-import customtkinter as ctk
+import customtkinter as ctk # dark themed widget library
+import tkinter.messagebox as mb # pop-up dialos for validation errors
+import threading # runs backtest in background thread
+import queue # message passing
+import sys # to swap out sys.stdout with queue.Queue
+import re # to parse dates out of log lines for the program
+import os # to check whether csv files actually exist
+import numpy as np # to populate _populate_results for sharpe calculation
+import pandas as pd # to load the proce csv for rebalance count estimate
 
 DEFAULTS = {
-            "constituents_path": "sp500_constituents.csv",
-            "initial_capital": 1000000.0,
-            "lookback_window": 252,
-            "rebal_freq": 21,
-            "corr_threshold": 0.60,
-            "min_hl": 5.0,
-            "max_hl": 40.0,
-            "max_z": 3.5,
-            "normal_z": 1.75,
-            "panic_z": 2.25,
-            "hmm_window": 126,
-            "hmm_restarts": 20,
-            "stop_loss_pct": 0.05,
-            "position_size_pct": 0.10,
-            "panic_size_mult": 0.50,
-            "max_concurrent": 10
+    "constituents_path": "sp500_constituents.csv",
+    "initial_capital": 1000000.0,
+    "lookback_window": 252,
+    "rebal_freq": 21,
+    "corr_threshold": 0.60,
+    "min_hl": 5.0,
+    "max_hl": 40.0,
+    "max_z": 3.5,
+    "normal_z": 1.75,
+    "panic_z": 2.25,
+    "hmm_window": 126,
+    "hmm_restarts": 20,
+    "stop_loss_pct": 0.05,
+    "position_size_pct": 0.10,
+    "panic_size_mult": 0.50,
+    "max_concurrent": 10
 }
 
 class _QueueStream:
+    # bridging threads safely
+    # replacing sys.stdout with an insance of this class in print() will mean every print from the backtester
+    # will be put into queue.Queue instead of the terminal. 
+
     def __init__(self, q: queue.Queue):
         self._q = q
 
@@ -28,9 +40,11 @@ class _QueueStream:
             self._q.put(text)
 
     def flush(self):
-        pass
+        pass # to avoid attribute error
 
 class _ParamRow(ctk.CTkFrame):
+    # adding and removing parameters
+
     def __init__(self, parent, label, default, tooltip="", **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
         self.grid_columnconfigure(1, weight=1)
