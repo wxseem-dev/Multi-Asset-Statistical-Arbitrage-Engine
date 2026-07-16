@@ -434,7 +434,7 @@ class BacktestApp(ctk.CTk):
         for _ in range(40):
             try:
                 msg = self._log_queue.get_nowait()
-            except queue.Empty():
+            except queue.Empty:
                 break
 
             if msg == "\x00DONE":

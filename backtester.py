@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import requests
+import numpy as np
 from quant_math import build_universe, build_industry_universe, generate_pairs, align_prices, correlation_filter, cointegration_test, estimate_beta, spread_construction, adf_test, neg_log_likelihood, calibrate_ou, reversion_probability, compute_z_score, generate_signal, detect_market_regime, calculate_copula_probability
 from tqdm import tqdm
 import yfinance as yf
@@ -206,6 +207,12 @@ class WalkForwardBacktester:
 
         print(f" -> Scanning {len(all_possible_pairs)} pairs.")
 
+        print(" -> Pre-calculating correlation matrix..")
+        # get the percentage changes of all stocks at once
+        log_returns_m = np.log(historical_slice).diff().dropna()
+        # create a massive matrix showing how every stock correlates to every other stock
+        corr_matrix = log_returns.corr()
+
         for industry, a, b in tqdm(all_possible_pairs, desc="Analyzing pairs"):
             # check if both tickers actually exist in our historical slice
             if a not in historical_slice.columns or b not in historical_slice.columns:
@@ -215,7 +222,10 @@ class WalkForwardBacktester:
             price_a, price_b = align_prices(historical_slice[a], historical_slice[b])
 
             # Filter 1: Correlation
-            if not correlation_filter(price_a, price_b, threshold=self.cfg["corr_threshold"]):
+            #if not correlation_filter(price_a, price_b, threshold=self.cfg["corr_threshold"]):
+                #continue
+            #stats["corr_pass"] += 1
+            if corr_matrix.loc[a, b] < self.cfg["corr_threshold"]:
                 continue
             stats["corr_pass"] += 1
 
