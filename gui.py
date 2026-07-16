@@ -341,7 +341,8 @@ class BacktestApp(ctk.CTk):
                 "panic_size_mult":    float(raw["panic_size_mult"])   / 100.0,
                 "max_concurrent":     int(raw["max_concurrent"]),
                 "hmm_window":         int(raw["hmm_window"]),
-                "hmm_restarts":       int(raw["hmm_restarts"]), 
+                "hmm_restarts":       int(raw["hmm_restarts"]),
+                "disable_tqdm": True 
             }
         except ValueError as e:
             mb.showerror("Invalid Input", f"Check parameter values:\n{e}")

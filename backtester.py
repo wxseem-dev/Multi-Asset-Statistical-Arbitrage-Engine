@@ -213,7 +213,9 @@ class WalkForwardBacktester:
         # create a massive matrix showing how every stock correlates to every other stock
         corr_matrix = log_returns.corr()
 
-        for industry, a, b in tqdm(all_possible_pairs, desc="Analyzing pairs"):
+        hide_bar = self.cfg.get("disable_tqdm", False)
+
+        for industry, a, b in tqdm(all_possible_pairs, desc="Analyzing pairs", disable=hide_bar):
             # check if both tickers actually exist in our historical slice
             if a not in historical_slice.columns or b not in historical_slice.columns:
                 continue
